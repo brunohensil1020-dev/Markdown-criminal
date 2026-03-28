@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Vision Criminal - Cockpit de Auditoria</title>
+    <script src="https://unpkg.com/docx@7.1.0/build/index.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    
+    <style>
+        :root { --neon-blue: #00f2fe; --neon-green: #00ff88; --bg-dark: #050505; }
+        body { background: var(--bg-dark); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* SIDEBAR E ABAS */
+        .sidebar { width: 260px; background: #0a0a0a; border-right: 1px solid #222; padding: 20px; display: flex; flex-direction: column; }
+        .tab-btn { background: transparent; border: 1px solid #333; color: #666; padding: 12px; margin-bottom: 10px; cursor: pointer; text-align: left; font-weight: bold; transition: 0.3s; border-radius: 4px; }
+        .tab-btn.active { border-color: var(--neon-blue); color: var(--neon-blue); box-shadow: 0 0 15px rgba(0,242,254,0.1); }
+        .tab-btn:hover { background: rgba(0, 242, 254, 0.05); }
+
+        /* PAINEL MATTE QUENTE */
+        .main-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; align-items: center; }
+        .painel-matte {
+            background: rgba(255, 213, 79, 0.85); backdrop-filter: blur(10px);
+            color: #000; text-align: justify; padding: 40px; border-radius: 4px;
+            width: 90%; max-width: 800px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            transition: all 0.3s ease; margin-top: 20px; min-height: 200px;
+            font-family: 'Times New Roman', serif;
+        }
+        .painel-matte p { text-indent: 3cm; margin-bottom: 1.5em; line-height: 1.6; font-size: 1.1em; }
+        
+        /* ESTILO DE DIARIZAÇÃO (QUEM FALA) */
+        .spk { background: rgba(0,0,0,0.08); padding: 3px 8px; border-radius: 3px; font-weight: bold; margin-right: 8px; color: #2b5797; font-size: 0.9em; font-family: 'Segoe UI'; }
+
+        /* ANIMAÇÃO DE CARREGAMENTO PARA ÁUDIOS LONGOS */
+        .loading-pulse { animation: pulse 1.5s infinite; color: var(--neon-blue); text-align: center; font-weight: bold; font-size: 1.2em; }
+        @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; text-shadow: 0 0 10px var(--neon-blue); } 100% { opacity: 0.5; } }
+        .timer { font-size: 2em; color: var(--neon-green); text-align: center; margin-top: 10px; font-family: monospace; }
+
+        .tab-content { display: none; width: 100%; }
+        .tab-content.active { display: block; }
+
+        input[type="file"], select, input[type="text"] { padding: 10px; background: #111; color: #fff; border: 1px solid #333; margin: 5px; border-radius: 4px; }
+        button.btn-acao { background: var(--neon-blue); color: #000; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; margin: 5px; border-radius: 4px; transition: 0.3s; }
+        button.btn-acao:hover { box-shadow: 0 0 15px var(--neon-blue); }
+        button.btn-export { background: transparent; border: 1px solid #2b5797; color: #2b5797; padding: 10px 20px; font-weight: bold; cursor: pointer; margin-top: 20px; border-radius: 4px; transition: 0.3s; }
+        button.btn-export:hover { background: #2b5797; color: #fff; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2 style="color:var(--neon-blue); font-size:18px;">VISION CRIMINAL</h2>
+        <p style="font-size:11px; color:#666; margin-top:-10px;">Três Lagoas / MS</p>
+        <hr style="border:0.5px solid #222; width:100%; margin: 10px 0 20px 0;">
+        
+        <button class="tab-btn active" onclick="switchTab('tab-relatorio', this)">📑 AUDITORIA PDF</button>
+        <button class="tab-btn" onclick="switchTab('tab-transcricao', this)">🎙️ TRANSCRIÇÃO ASF</button>
+        <button class="tab-btn" onclick="switchTab('tab-lab', this)">🧪 LAB TRAINING</button>
+        <hr style="border:0.5px solid #222; width:100%; margin: 20px 0;">
+        <button onclick="location.reload()" style="background:transparent; border:1px solid #ff4444; color:#ff4444; padding:10px; cursor:pointer; font-weight:bold;">ENCERRAR SESSÃO</button>
+    </div>
+
+    <div class="main-content">
+        <div id="tab-relatorio" class="tab-content active">
+            <div style="text-align:center;">
+                <input type="file" id="pdfFile" accept=".pdf">
+                <button class="btn-acao" onclick="processarPDF()">VARREDURA NEURAL</button>
+                <div id="progresso-container" style="width: 100%; background: #111; height: 5px; margin-top: 15px; border-radius: 3px; overflow: hidden;">
+                    <div id="progresso" style="width: 0%; height: 100%; background: var(--neon-blue); transition: 0.4s;"></div>
+                </div>
+            </div>
+            <div class="painel-matte" id="painel-p1">
+                <h2 style="text-align:center; color:#333;">AGUARDANDO PROCESSO...</h2>
+                <p>Análise técnica imparcial de autos criminais.</p>
+            </div>
+            <div style="text-align:center;">
+                <button class="btn-export" onclick="baixarWordRelatorio()">🟦 EXPORTAR RELATÓRIO (.DOCX)</button>
+            </div>
+        </div>
+
+        <div id="tab-transcricao" class="tab-content">
+            <div style="text-align:center; background:#111; padding:15px; border-radius:8px;">
+                <input type="file" id="audioFile" accept=".asf">
+                <select id="modelSelector">
+                    <option value="whisper-large-v3">Groq - Whisper Large V3</option>
+                    <option value="whisper-v3-turbo">Groq - Whisper V3 Turbo</option>
+                    <option value="universal-3-pro">AssemblyAI - Universal Pro 3</option>
+                </select>
+                <button class="btn-acao" onclick="processarTranscricao()">TRANSCREVER</button>
+            </div>
+            <div class="painel-matte" id="painel-p2">
+                <h2 style="text-align:center; color:#333;">PAINEL DE TRANSCRIÇÃO</h2>
+                <p>Insira o arquivo ASF para iniciar a conversão e diarização.</p>
+            </div>
+            <div style="text-align:center;">
+                <button class="btn-export" onclick="baixarWordTranscricao()">🟦 EXPORTAR TRANSCRIÇÃO (.DOCX)</button>
+            </div>
+        </div>
+
+        <div id="tab-lab" class="tab-content">
+            <div class="painel-matte" style="text-align:center;">
+                <h2 style="color:#333;">COFRE DE INTEGRAÇÃO (SECRETS)</h2>
+                <p style="text-indent: 0; text-align:center;">Insira as chaves API para liberar os modelos de Inteligência Artificial.</p>
+                <input type="text" id="apiGroq" placeholder="API Key Groq" style="width:80%; margin-bottom:10px;"><br>
+                <input type="text" id="apiAssembly" placeholder="API Key AssemblyAI" style="width:80%; margin-bottom:10px;"><br>
+                <button class="btn-acao" onclick="salvarSecrets()">SALVAR CHAVES COM SEGURANÇA</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- NAVEGAÇÃO DE ABAS ---
+        function switchTab(tabId, btn) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            btn.classList.add('active');
+        }
+
+        // --- SALVAR CHAVES (LAB TRAINING) ---
+        async function salvarSecrets() {
+            const keys = { 
+                groq: document.getElementById('apiGroq').value, 
+                assembly: document.getElementById('apiAssembly').value 
+            };
+            try {
+                const res = await fetch('/save-keys', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(keys) });
+                const data = await res.json();
+                alert(data.msg);
+            } catch(e) { alert("Erro de conexão com o servidor."); }
+        }
+
+        // --- CRONÔMETRO DE PROCESSAMENTO ---
+        let timerInterval;
+        function iniciarCronometro(painel) {
+            let sec = 0;
+            painel.innerHTML = `
+                <div class="loading-pulse">PROCESSANDO REDE NEURAL...</div>
+                <div class="timer" id="timer-display">00:00</div>
+                <p style="text-align:center; text-indent:0; margin-top:20px;">Aguarde. Arquivos de áudio longos exigem conversão FFmpeg profunda.</p>
+            `;
+            timerInterval = setInterval(() => {
+                sec++;
+                let m = Math.floor(sec / 60).toString().padStart(2, '0');
+                let s = (sec % 60).toString().padStart(2, '0');
+                const display = document.getElementById('timer-display');
+                if(display) display.innerText = `${m}:${s}`;
+            }, 1000);
+        }
+        function pararCronometro() { clearInterval(timerInterval); }
+
+        // --- LÓGICA DE AUDITORIA PDF ---
+        window.dadosRelatorio = null;
+        async function processarPDF() {
+            const fileInput = document.getElementById('pdfFile');
+            if (!fileInput.files[0]) return alert("Selecione um PDF.");
+
+            const painel = document.getElementById('painel-p1');
+            const progresso = document.getElementById('progresso');
+            
+            painel.innerHTML = "<h2>VARREDURA NEURAL...</h2>";
+            progresso.style.width = "40%";
+
+            const fd = new FormData();
+            fd.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch("/analisar", { method: "POST", body: fd });
+                const res = await response.json();
+
+                if (res.status === "sucesso") {
+                    progresso.style.width = "100%";
+                    window.dadosRelatorio = res.detalhes;
+                    setTimeout(() => {
+                        painel.innerHTML = `
+                            <h2 style="color:#333; text-align:center;">Relatório de Auditoria Digital</h2>
+                            <p><strong>ALVO:</strong> ${res.detalhes.campoA}</p>
+                            <p><strong>PROCESSO:</strong> ${res.detalhes.campoB}</p>
+                            <p>${res.detalhes.relatorioFatos}</p>
+                        `;
+                    }, 600);
+                }
+            } catch (e) {
+                progresso.style.background = "#ff4444";
+                painel.innerHTML = "<h2>ERRO NO MOTOR</h2>";
+            }
+        }
+
+        async function baixarWordRelatorio() {
+            if (!window.dadosRelatorio) return alert("Execute a auditoria primeiro.");
+            const { Document, Packer, Paragraph, TextRun, AlignmentType, Header } = docx;
+            const d = window.dadosRelatorio;
+
+            const doc = new Document({
+                sections: [{
+                    headers: {
+                        default: new Header({
+                            children: [
+                                new Paragraph({ children: [new TextRun({ text: "AO JUIZO DA VARA DE VIOLÊNCIA DOMÉSTICA DA COMARCA DE TRÊS LAGOAS/MS", bold: true, size: 24 })], alignment: AlignmentType.CENTER })
+                            ]
+                        })
+                    },
+                    children: [
+                        new Paragraph({ children: [new TextRun({ text: "RELATÓRIO DE AUDITORIA DIGITAL", bold: true, size: 28 })], spacing: { before: 400, after: 400 }, alignment: AlignmentType.CENTER }),
+                        new Paragraph({ children: [new TextRun({ text: `ALVO: ${d.campoA}`, bold: true })], spacing: { after: 200 } }),
+                        new Paragraph({ children: [new TextRun({ text: `PROCESSO: ${d.campoB}`, bold: true })], spacing: { after: 400 } }),
+                        new Paragraph({ text: d.relatorioFatos, alignment: AlignmentType.JUSTIFIED, spacing: { line: 360 } })
+                    ]
+                }]
+            });
+            const blob = await Packer.toBlob(doc);
+            saveAs(blob, `Auditoria_${d.campoA.split(' ')[0]}.docx`);
+        }
+
+        // --- LÓGICA DE TRANSCRIÇÃO (ABA 2) ---
+        window.dadosTranscricao = null;
+
+        async function processarTranscricao() {
+            const file = document.getElementById('audioFile').files[0];
+            const model = document.getElementById('modelSelector').value;
+            const painel = document.getElementById('painel-p2');
+            
+            if(!file) return alert("Anexe um arquivo de áudio (.asf).");
+            
+            iniciarCronometro(painel);
+            
+            const fd = new FormData();
+            fd.append('audio', file);
+            fd.append('model', model);
+
+            try {
+                const res = await fetch('/transcrever', { method: 'POST', body: fd });
+                pararCronometro();
+                
+                if (!res.ok) {
+                    const errData = await res.json();
+                    return painel.innerHTML = `<h2 style="color:#e74c3c; text-align:center;">ERRO: ${errData.erro}</h2>`;
+                }
+
+                const result = await res.json();
+                window.dadosTranscricao = result.data; 
+                
+                painel.innerHTML = result.data.map(item => `
+                    <p><span class="spk">${item.spk}</span> ${item.text}</p>
+                `).join('');
+                
+            } catch (e) {
+                pararCronometro();
+                painel.innerHTML = `<h2 style="color:#e74c3c; text-align:center;">FALHA DE COMUNICAÇÃO</h2><p style="text-align:center;">O servidor não respondeu a tempo.</p>`;
+            }
+        }
+
+        async function baixarWordTranscricao() {
+            if (!window.dadosTranscricao) return alert("Nenhuma transcrição foi gerada ainda.");
+            const { Document, Packer, Paragraph, TextRun, AlignmentType, Header } = docx;
+
+            const paragrafosDocx = window.dadosTranscricao.map(item => {
+                return new Paragraph({
+                    children: [
+                        new TextRun({ text: `[${item.spk}] `, bold: true, color: "2B5797" }), 
+                        new TextRun({ text: item.text })
+                    ],
+                    spacing: { after: 200 },
+                    alignment: AlignmentType.JUSTIFIED
+                });
+            });
+
+            const doc = new Document({
+                sections: [{
+                    headers: {
+                        default: new Header({
+                            children: [
+                                new Paragraph({ children: [new TextRun({ text: "AO JUIZO DA VARA DE VIOLÊNCIA DOMÉSTICA DA COMARCA DE TRÊS LAGOAS/MS", bold: true, size: 24 })], alignment: AlignmentType.CENTER })
+                            ]
+                        })
+                    },
+                    children: [
+                        new Paragraph({ children: [new TextRun({ text: "TRANSCRIÇÃO DE AUDIÊNCIA", bold: true, size: 28 })], spacing: { before: 400, after: 400 }, alignment: AlignmentType.CENTER }),
+                        ...paragrafosDocx 
+                    ]
+                }]
+            });
+
+            const blob = await Packer.toBlob(doc);
+            saveAs(blob, `Transcricao_Audiencia.docx`);
+        }
+    </script>
+</body>
+</html>
