@@ -54,21 +54,29 @@ const IGNORAR_LIXO = [
     "mandado", "dilação de prazo", "ofício", "oficio", "outros documentos", "termo"
 ];
 
-// Função compartilhada de extração de texto de ZIP/PDF com filtros E-SAJ
-async function extrairTextoFiltrado(fileBuffer, originalName) {
+// Função compartilhada de extração com FILTROS DINÂMICOS (Front + Back)
+async function extrairTextoFiltrado(fileBuffer, originalName, customManter = "", customIgnorar = "") {
     let textoConsolidado = "";
     const aceitos = [];
     const removidos = [];
+
+    // Mescla as regras fixas do servidor com as regras digitadas por você na tela
+    const extraManter = customManter.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const extraIgnorar = customIgnorar.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    
+    const regrasManter = [...MANTER_PRIORIDADE, ...extraManter];
+    const regrasIgnorar = [...IGNORAR_LIXO, ...extraIgnorar];
 
     if (originalName.toLowerCase().endsWith('.zip')) {
         const zip = new AdmZip(fileBuffer);
         for (const entry of zip.getEntries()) {
             if (!entry.isDirectory && entry.name.toLowerCase().endsWith('.pdf')) {
                 
-                // CORREÇÃO CRÍTICA: Usa 'entry.name' (apenas o arquivo) e não o caminho da pasta
                 const nomeArquivo = entry.name.toLowerCase(); 
-                const ehLixo = IGNORAR_LIXO.some(p => nomeArquivo.includes(p));
-                const blindado = MANTER_PRIORIDADE.some(p => nomeArquivo.includes(p));
+                
+                // Usa as novas listas mescladas para tomar a decisão
+                const ehLixo = regrasIgnorar.some(p => nomeArquivo.includes(p));
+                const blindado = regrasManter.some(p => nomeArquivo.includes(p));
                 
                 if (ehLixo && !blindado) {
                     removidos.push(entry.name);
@@ -92,96 +100,126 @@ async function extrairTextoFiltrado(fileBuffer, originalName) {
 }
 
 // ============================================================
-// MOTOR DE LEITURA DE PDF (GROQ LLAMA 3.3 70B)
+// MOTOR DE LEITURA DE PDF (FALLBACK: GEMINI -> CLAUDE -> GROQ)
 // ============================================================
-async function lerPDFcomIA(textoBruto, apiKey) {
+async function lerPDFcomIA(textoBruto, chaves) {
     const promptSistema = `Você é um Analista Jurídico Sênior especializado em auditoria de processos criminais. 
-Sua função é ler o texto do PDF e extrair os dados EXATAMENTE no formato JSON solicitado.
+Sua função é ler o texto do processo e extrair os dados EXATAMENTE no formato JSON solicitado.
 
 REGRAS ABSOLUTAS:
-1. Nunca invente dados ou complete lacunas por inferência.
-2. Se um dado não for localizado, o valor no JSON DEVE ser exatamente: "não localizado no PDF analisado".
-3. Anonimize nomes de partes, vítimas e testemunhas (Primeiro nome + Iniciais). Ex: João da Silva -> João S.
-4. O retorno deve ser ÚNICO e EXCLUSIVAMENTE um objeto JSON válido, sem textos antes ou depois.
+1. Nunca invente dados.
+2. Se não achar, o valor DEVE ser: "não localizado no PDF analisado".
+3. Anonimize nomes de partes (Primeiro nome + Iniciais). Ex: João da Silva -> João S.
+4. Retorne ÚNICO e EXCLUSIVAMENTE um objeto JSON válido, sem comentários.
 
-CAMPOS A EXTRAIR (A a H):
-Retorne o JSON com as seguintes chaves exatas:
+CAMPOS A EXTRAIR:
 {
-  "campoA_denuncia": "Acusados, idade, data do crime, vítimas, artigos imputados e testemunhas da acusação.",
+  "campoA_denuncia": "Acusados, data do crime, vítimas, artigos imputados e testemunhas da acusação.",
   "campoB_bo": "Data/hora do registro, data/hora do fato e tempo decorrido.",
-  "campoC_depoimentos": "Resumo objetivo e trechos-chave de vítimas e testemunhas.",
+  "campoC_depoimentos": "Resumo objective e trechos-chave de vítimas e testemunhas.",
   "campoD_laudos": "Conclusões de laudos periciais e certidões.",
   "campoE_delegado": "Resumo do relatório policial focando em verbos de ação e provas.",
-  "campoF_incidentes": "Data do recebimento da denúncia (busque a assinatura digital do magistrado), resposta à acusação e alegações finais.",
-  "campoG_cronometria": "Tempo decorrido desde o recebimento da denúncia até o momento atual.",
+  "campoF_incidentes": "Data do recebimento da denúncia, resposta à acusação e alegações finais.",
+  "campoG_cronometria": "Tempo decorrido desde o recebimento da denúncia.",
   "campoH_sentenca": "Resultado, artigos, pena, regime e último despacho (se houver).",
-  "relatorioFatos": "Crie um texto contínuo chamado DOS FATOS. Exemplo: 'Trata-se de ação penal em que o MP imputou ao denunciado [NOME] a prática do art [ARTIGOS]. Consta que em [DATA], o acusado praticou [CONDUTA] contra [VÍTIMA]. A denúncia foi recebida em [DATA]. É o breve relato dos fatos.'"
+  "relatorioFatos": "Crie um texto contínuo chamado DOS FATOS resumindo o caso de forma imparcial."
 }`;
 
-    try {
-        const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-            model: "llama-3.3-70b-versatile",
-            messages: [
-                { role: "system", content: promptSistema },
-                { role: "user", content: textoBruto.substring(0, 120000) }
-            ],
-            response_format: { type: "json_object" },
-            temperature: 0.1
-        }, { 
-            headers: { 'Authorization': `Bearer ${apiKey}` },
-            timeout: 60000
-        });
+    let logErros = [];
 
-        return JSON.parse(response.data.choices[0].message.content);
-    } catch (e) {
-        // Captura o motivo EXATO da recusa da API
-        let motivoExato = "Erro desconhecido";
-        if (e.response && e.response.data && e.response.data.error) {
-            motivoExato = e.response.data.error.message;
-        } else if (e.message) {
-            motivoExato = e.message;
+    // 1. TENTATIVA 1: GEMINI 1.5 PRO (Caminhão de Carga: Suporta 2 Milhões de Tokens)
+    if (chaves.gemini) {
+        try {
+            const promptCompleto = promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto;
+            const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key=${chaves.gemini}`, {
+                contents: [{ parts: [{ text: promptCompleto }] }],
+                generationConfig: { responseMimeType: "application/json" } // Força o Gemini a devolver JSON puro
+            }, { headers: { 'Content-Type': 'application/json' } });
+            
+            return JSON.parse(res.data.candidates[0].content.parts[0].text);
+        } catch (e) {
+            console.error("Erro no motor Gemini:", e.response ? JSON.stringify(e.response.data) : e.message);
+            logErros.push("GEMINI");
         }
-        
-        console.error("Erro CRÍTICO na Groq:", motivoExato);
-        // Joga a verdade nua e crua para a tela do usuário
-        throw new Error(`Recusa da IA (Groq): ${motivoExato}`);
     }
+
+    // 2. TENTATIVA 2: CLAUDE 3.5 SONNET (Contexto longo: Suporta 200 mil Tokens)
+    if (chaves.claude) {
+         try {
+            const res = await axios.post('https://api.anthropic.com/v1/messages', {
+                model: "claude-3-5-sonnet-20241022", max_tokens: 8000,
+                messages: [{ role: "user", content: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }]
+            }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
+            
+            // Limpa as marcações Markdown que o Claude costuma adicionar
+            let textoResposta = res.data.content[0].text;
+            textoResposta = textoResposta.replace(/```json/g, '').replace(/```/g, '').trim();
+            return JSON.parse(textoResposta);
+        } catch (e) {
+            console.error("Erro no motor Claude:", e.response ? JSON.stringify(e.response.data) : e.message);
+            logErros.push("CLAUDE");
+        }
+    }
+
+    // 3. TENTATIVA 3: GROQ (Ferrari com porta-malas pequeno: Suporta apenas 12 mil Tokens)
+    if (chaves.groq) {
+         try {
+            const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
+                model: "llama-3.3-70b-versatile",
+                messages: [
+                    { role: "system", content: promptSistema },
+                    // CORTAMOS O TEXTO EM 35.000 CARACTERES PARA NÃO ESTOURAR O LIMITE DA CONTA GRÁTIS
+                    { role: "user", content: textoBruto.substring(0, 35000) } 
+                ],
+                response_format: { type: "json_object" },
+                temperature: 0.1
+            }, { headers: { 'Authorization': `Bearer ${chaves.groq}` } });
+            
+            return JSON.parse(res.data.choices[0].message.content);
+        } catch (e) {
+            console.error("Erro no motor Groq:", e.response ? e.response.data.error.message : e.message);
+            logErros.push("GROQ");
+        }
+    }
+
+    // Se as 3 IA's falharem (ou se você não tiver salvo as chaves no Cofre)
+    throw new Error(`Falha Crítica. Motores tentados e falhos: ${logErros.length > 0 ? logErros.join(' -> ') : 'NENHUMA CHAVE CADASTRADA'}. Vá na Aba Cofre API e cadastre a chave do Gemini ou Claude.`);
 }
 
-// --- ROTA DE EXTRAÇÃO DE TEXTO LIMPO (SEM IA) ---
+// --- ROTA DE EXTRAÇÃO DE TEXTO LIMPO ---
 app.post('/extrair-texto', uploadPDF.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ erro: "Arquivo ausente." });
 
-        const { textoConsolidado, aceitos, removidos } = await extrairTextoFiltrado(req.file.buffer, req.file.originalname);
+        // Captura os filtros customizados enviados pelo HTML
+        const { customManter, customIgnorar } = req.body;
+        
+        const { textoConsolidado, aceitos, removidos } = await extrairTextoFiltrado(req.file.buffer, req.file.originalname, customManter, customIgnorar);
         if (!textoConsolidado) return res.status(400).json({ erro: "Todos os PDFs foram filtrados como irrelevantes." });
 
         const textoLimpo = textoConsolidado.replace(/\s+/g, ' ').trim();
-        res.json({
-            status: "sucesso",
-            totalAceitos: aceitos.length,
-            totalRemovidos: removidos.length,
-            aceitos, removidos,
-            caracteres: textoLimpo.length,
-            textoLimpo
-        });
+        res.json({ status: "sucesso", totalAceitos: aceitos.length, totalRemovidos: removidos.length, aceitos, removidos, caracteres: textoLimpo.length, textoLimpo });
     } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// --- ROTA DE AUDITORIA IMPARCIAL (COM FILTRO E-SAJ) ---
+// --- ROTA DE AUDITORIA IMPARCIAL (Com Falback Integrado) ---
 app.post('/analisar', uploadPDF.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ erro: "Arquivo ausente." });
         
+        // Pega o cofre INTEIRO e manda para a função lerPDFcomIA
         const chaves = getKeys();
-        if (!chaves || !chaves.groq) return res.status(403).json({ erro: "Chave da Groq ausente." });
+        if (!chaves) return res.status(403).json({ erro: "Cofre Neural vazio. Cadastre as chaves de API na Aba 4." });
 
-        const { textoConsolidado, aceitos, removidos } = await extrairTextoFiltrado(req.file.buffer, req.file.originalname);
-        if (!textoConsolidado) return res.status(400).json({ erro: "Todos os PDFs foram filtrados como irrelevantes." });
+        // Captura os filtros customizados enviados pelo HTML
+        const { customManter, customIgnorar } = req.body;
 
-        const detalhes = await lerPDFcomIA(textoConsolidado.replace(/\s+/g, ' '), chaves.groq);
+        const { textoConsolidado, aceitos, removidos } = await extrairTextoFiltrado(req.file.buffer, req.file.originalname, customManter, customIgnorar);
+        if (!textoConsolidado) return res.status(400).json({ erro: "Todos os PDFs foram filtrados como lixo processual." });
+
+        // A MÁGICA ACONTECE AQUI: Passamos todas as chaves para a IA escolher qual motor usar
+        const detalhes = await lerPDFcomIA(textoConsolidado.replace(/\s+/g, ' '), chaves);
         
-        // CORREÇÃO: Enviando as listas 'aceitos' e 'removidos' para o painel Neural
         res.json({ status: "sucesso", detalhes, arquivosLidos: aceitos, arquivosIgnorados: removidos });
     } catch (e) {
         res.status(500).json({ erro: e.message });
