@@ -98,8 +98,8 @@
                     <div style="text-align: right; margin-top: 15px; border-top: 1px solid #222; padding-top: 15px;">
                         <label style="font-size: 11px; color: #888; margin-right: 10px;">IA DE EXTRAÇÃO:</label>
                         <select id="modeloAuditoria" style="width: auto; padding: 8px; font-size: 12px; background: #222; border: 1px solid #444; margin-right: 15px; border-radius: 4px;">
-                            <option value="gemini">Google Gemini 2.0 Flash (Mais Rápido)</option>
-                            <option value="claude">Anthropic Claude Sonnet 4 (Alta Precisão)</option>
+                            <option value="gemini">Google Gemini 2.5 Flash (Atual)</option>
+                            <option value="claude">Anthropic Claude Sonnet 4 (Atual)</option>
                             <option value="groq">Groq Llama 3.3 (Custo Zero)</option>
                         </select>
                         <button class="btn-acao" onclick="extrairTextoLimpo()" style="background:#00ff88; color:#000; font-size: 12px; padding: 10px 15px;">💾 APENAS EXTRAIR TEXTO</button>
@@ -140,7 +140,7 @@
                 </div>
                 <div class="lab-step">
                     <h3 style="color:var(--neon-blue); margin-top:0;">PASSO 2: REDAÇÃO DA PEÇA</h3>
-                    <select id="modeloPeca" style="width:auto; display:inline-block;"><option value="claude">Anthropic Claude</option><option value="gemini">Google Gemini</option></select>
+                    <select id="modeloPeca" style="width:auto; display:inline-block;"><option value="claude">Anthropic Claude Sonnet 4</option><option value="gemini">Google Gemini 2.5 Flash</option></select>
                     <button class="btn-acao" onclick="redigirPecaDefensiva()">✍️ REDIGIR PEÇA</button>
                 </div>
             </div>
