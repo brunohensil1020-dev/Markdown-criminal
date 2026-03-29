@@ -138,41 +138,302 @@ function normalizar(texto) {
     return texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[-_]/g, '').toLowerCase();
 }
 
+// ============================================================
+// EXTRAÇÃO ROBUSTA DE BO + TEXTO FILTRADO
+// ============================================================
+function identificarPecaBO(nomeArquivo = "", texto = "") {
+    const alvo = normalizar(`${nomeArquivo} ${texto.slice(0, 3000)}`);
+    const sinais = [
+        "boletim de ocorrencia",
+        "boletim de ocorrência",
+        "ocorrencia n",
+        "ocorrência n",
+        "registro de ocorrencia",
+        "registro de ocorrência",
+        "fatos comunicados",
+        "data/hora do fato",
+        "historico da ocorrencia",
+        "histórico da ocorrência",
+        "delegacia",
+        "delpol",
+        "ro ",
+        "b.o"
+    ];
+    return sinais.some(s => alvo.includes(normalizar(s)));
+}
+
+function limparQuebrasEstranhas(texto = "") {
+    return String(texto || "")
+        .replace(/\r/g, "\n")
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
+function sanitizarValorBO(valor = "") {
+    return String(valor || "")
+        .replace(/\s+/g, " ")
+        .replace(/\b(?:numero despacho|numero do despacho|historico|histórico|natureza|fato\(s\) comunicado\(s\)|fatos comunicados|providencia|providência)\b.*$/i, "")
+        .replace(/\s+(?:numero|n[uú]mero)\s+despacho.*$/i, "")
+        .replace(/\s+data\/hora\s+do\s+fato.*$/i, "")
+        .replace(/\s+fato\(s\)\s+comunicado\(s\).*$/i, "")
+        .replace(/\s+hist[oó]rico.*$/i, "")
+        .replace(/[.;,\-–—\s]+$/g, "")
+        .trim();
+}
+
+function extrairPrimeiroMatch(textos = [], padroes = []) {
+    for (const texto of textos) {
+        for (const padrao of padroes) {
+            const m = texto.match(padrao);
+            if (m && m[1]) {
+                const valor = sanitizarValorBO(m[1]);
+                if (valor) return valor;
+            }
+        }
+    }
+    return "";
+}
+
+function extrairPrimeiraDataHoraDeTexto(texto = "") {
+    const fonte = String(texto || "").replace(/\s+/g, " ").trim();
+
+    const matchNumerico = fonte.match(
+        /(\d{1,2}\/\d{1,2}\/\d{4})(?:\s*(?:às|as)?\s*(\d{1,2})[:h](\d{2}))?/i
+    );
+    if (matchNumerico) {
+        const [, data, hh = "00", mm = "00"] = matchNumerico;
+        const [dia, mes, ano] = data.split("/").map(Number);
+        return new Date(ano, mes - 1, dia, Number(hh), Number(mm), 0, 0);
+    }
+
+    const meses = {
+        janeiro: 0, fevereiro: 1, março: 2, marco: 2, abril: 3, maio: 4, junho: 5,
+        julho: 6, agosto: 7, setembro: 8, outubro: 9, novembro: 10, dezembro: 11
+    };
+
+    const matchExtenso = fonte.match(
+        /(\d{1,2})\s+de\s+([a-zçãõáéíóú]+)\s+de\s+(\d{4})(?:\s*(?:às|as)?\s*(\d{1,2})[:h](\d{2}))?/i
+    );
+    if (matchExtenso) {
+        const dia = Number(matchExtenso[1]);
+        const mesNome = normalizar(matchExtenso[2]);
+        const ano = Number(matchExtenso[3]);
+        const hh = Number(matchExtenso[4] || 0);
+        const mm = Number(matchExtenso[5] || 0);
+
+        if (meses[mesNome] !== undefined) {
+            return new Date(ano, meses[mesNome], dia, hh, mm, 0, 0);
+        }
+    }
+
+    return null;
+}
+
+function calcularTempoDecorridoBO(dataRegistro, dataFato) {
+    const dtRegistro = extrairPrimeiraDataHoraDeTexto(dataRegistro);
+    const dtFato = extrairPrimeiraDataHoraDeTexto(dataFato);
+
+    if (!dtRegistro || !dtFato || Number.isNaN(dtRegistro.getTime()) || Number.isNaN(dtFato.getTime())) {
+        return "";
+    }
+
+    const diffMs = dtRegistro.getTime() - dtFato.getTime();
+    if (diffMs < 0) return "";
+
+    const minutos = Math.round(diffMs / 60000);
+    const dias = Math.floor(minutos / 1440);
+    const horas = Math.floor((minutos % 1440) / 60);
+    const mins = minutos % 60;
+
+    const partes = [];
+    if (dias) partes.push(`${dias} dia(s)`);
+    if (horas) partes.push(`${horas} hora(s)`);
+    if (mins || partes.length === 0) partes.push(`${mins} minuto(s)`);
+
+    return partes.join(" e ");
+}
+
+function extrairDadosBOPrioritarios(pecasExtraidas = [], textoFallback = "") {
+    const candidatos = [];
+
+    for (const peca of pecasExtraidas) {
+        if (peca && (peca.eBo || identificarPecaBO(peca.nome, peca.texto))) {
+            candidatos.push({
+                origem: peca.nome || "peça sem nome",
+                texto: peca.texto || ""
+            });
+        }
+    }
+
+    if (candidatos.length === 0 && textoFallback) {
+        candidatos.push({
+            origem: "texto consolidado",
+            texto: textoFallback
+        });
+    }
+
+    const padroesRegistro = [
+        /ocorr[eê]ncia\s*n[ºo°]?\s*[:\-]?\s*[\d./-]+\s*[-–—]?\s*registrad[ao]\s*em\s*([^\n]{8,140})/i,
+        /registrad[ao]\s*em\s*((?:\d{1,2}\s+de\s+[a-zçãõáéíóú]+\s+de\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{4})(?:\s*(?:às|as)?\s*\d{1,2}[:h]\d{2}\s*(?:hs?|h)?)?)/i,
+        /ocorr[eê]ncia\s+registrada\s+em\s+data\/hora\s*[:\-]?\s*([^\n]{8,140})/i,
+        /data\/hora\s+registro\s*[:\-]?\s*([^\n]{8,140})/i
+    ];
+
+    const padroesFato = [
+        /data\/hora\s+do\s+fato\s*[:\-]?\s*([^\n]{8,180})/i,
+        /fato\(s\)\s+comunicado\(s\)[\s\S]{0,180}?data\/hora\s+do\s+fato\s*[:\-]?\s*([^\n]{8,180})/i,
+        /data\s*\/?\s*hora\s+do\s+fato\s*[:\-]?\s*([^\n]{8,180})/i
+    ];
+
+    for (const candidato of candidatos) {
+        const textoCru = limparQuebrasEstranhas(candidato.texto || "");
+        const textoFlat = textoCru.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+
+        const dataRegistro = extrairPrimeiroMatch([textoCru, textoFlat], padroesRegistro);
+        const dataFato = extrairPrimeiroMatch([textoCru, textoFlat], padroesFato);
+        const tempoDecorrido = calcularTempoDecorridoBO(dataRegistro, dataFato);
+
+        if (dataRegistro || dataFato) {
+            return {
+                encontrado: true,
+                origem: candidato.origem,
+                dataRegistro,
+                dataFato,
+                tempoDecorrido
+            };
+        }
+    }
+
+    return {
+        encontrado: false,
+        origem: "",
+        dataRegistro: "",
+        dataFato: "",
+        tempoDecorrido: ""
+    };
+}
+
+function escapeRegExp(valor = "") {
+    return String(valor).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function substituirOuInserirLinha(textoBase = "", rotulo = "", valor = "") {
+    const texto = String(textoBase || "").trim();
+    const linhaNova = `${rotulo}: ${valor}`;
+    const re = new RegExp(`${escapeRegExp(rotulo)}\\s*:\\s*[^\\n]*`, "i");
+
+    if (!texto) return linhaNova;
+    if (re.test(texto)) return texto.replace(re, linhaNova);
+
+    return `${linhaNova}\n${texto}`;
+}
+
+function aplicarPrioridadeBOAoJSON(detalhesJSON = {}, dadosBO = {}) {
+    const saida = { ...(detalhesJSON || {}) };
+
+    if (!dadosBO || !dadosBO.encontrado) return saida;
+
+    if (dadosBO.dataRegistro) {
+        saida.campoB_bo = substituirOuInserirLinha(saida.campoB_bo || "", "Data/hora do registro", dadosBO.dataRegistro);
+        saida.campoG_cronometria = substituirOuInserirLinha(saida.campoG_cronometria || "", "Registro BO", dadosBO.dataRegistro);
+    }
+
+    if (dadosBO.dataFato) {
+        saida.campoB_bo = substituirOuInserirLinha(saida.campoB_bo || "", "Data/hora do fato", dadosBO.dataFato);
+    }
+
+    if (dadosBO.tempoDecorrido) {
+        saida.campoB_bo = substituirOuInserirLinha(saida.campoB_bo || "", "Tempo decorrido", dadosBO.tempoDecorrido);
+    }
+
+    return saida;
+}
+
 async function extrairTextoFiltrado(fileBuffer, originalName, customManter = "", customIgnorar = "") {
     let textoConsolidado = "";
-    const aceitos = [], removidos = [];
-    const extraManter = (customManter || "").split(',').map(s => normalizar(s.trim())).filter(Boolean);
-    const extraIgnorar = (customIgnorar || "").split(',').map(s => normalizar(s.trim())).filter(Boolean);
+    const aceitos = [];
+    const removidos = [];
+    const pecasExtraidas = [];
+
+    const extraManter = (customManter || "").split(",").map(s => normalizar(s.trim())).filter(Boolean);
+    const extraIgnorar = (customIgnorar || "").split(",").map(s => normalizar(s.trim())).filter(Boolean);
     const regrasManter = MANTER_PRIORIDADE.map(normalizar).concat(extraManter);
     const regrasIgnorar = IGNORAR_LIXO.map(normalizar).concat(extraIgnorar);
 
-    if (originalName.toLowerCase().endsWith('.zip')) {
+    if (originalName.toLowerCase().endsWith(".zip")) {
         const zip = new AdmZip(fileBuffer);
+
         for (const entry of zip.getEntries()) {
-            if (!entry.isDirectory && entry.name.toLowerCase().endsWith('.pdf')) {
-                const nomeArquivoNormalizado = normalizar(entry.name); 
+            if (!entry.isDirectory && entry.name.toLowerCase().endsWith(".pdf")) {
+                const nomeArquivoNormalizado = normalizar(entry.name);
                 const ehLixo = regrasIgnorar.some(p => nomeArquivoNormalizado.includes(p));
                 const blindado = regrasManter.some(p => nomeArquivoNormalizado.includes(p));
-                
-                if (ehLixo && !blindado) { removidos.push(entry.name); continue; }
+
+                if (ehLixo && !blindado) {
+                    removidos.push(entry.name);
+                    continue;
+                }
+
                 try {
                     const pdfData = await pdf(entry.getData());
-                    textoConsolidado += `\n\n=== PEÇA PROCESSUAL: ${entry.name} ===\n${pdfData.text}`;
+                    const textoPeca = limparQuebrasEstranhas(pdfData.text || "");
+
+                    textoConsolidado += `\n\n=== PEÇA PROCESSUAL: ${entry.name} ===\n${textoPeca}`;
+                    pecasExtraidas.push({
+                        nome: entry.name,
+                        texto: textoPeca,
+                        eBo: identificarPecaBO(entry.name, textoPeca)
+                    });
                     aceitos.push(entry.name);
-                } catch (err) { removidos.push(`${entry.name} (erro leitura)`); }
+                } catch (err) {
+                    removidos.push(`${entry.name} (erro leitura)`);
+                }
             }
         }
-    } else if (originalName.toLowerCase().endsWith('.pdf')) {
-        textoConsolidado = (await pdf(fileBuffer)).text; aceitos.push(originalName);
-    } else { throw new Error("Envie um .ZIP do E-SAJ ou um .PDF único."); }
+    } else if (originalName.toLowerCase().endsWith(".pdf")) {
+        const pdfData = await pdf(fileBuffer);
+        const textoPeca = limparQuebrasEstranhas(pdfData.text || "");
 
-    return { textoConsolidado, aceitos, removidos };
+        textoConsolidado = textoPeca;
+        pecasExtraidas.push({
+            nome: originalName,
+            texto: textoPeca,
+            eBo: identificarPecaBO(originalName, textoPeca)
+        });
+        aceitos.push(originalName);
+    } else {
+        throw new Error("Envie um .ZIP do E-SAJ ou um .PDF único.");
+    }
+
+    return {
+        textoConsolidado,
+        pecasExtraidas,
+        aceitos,
+        removidos
+    };
 }
 
 // ============================================================
 // IA DE AUDITORIA: FALLBACK E PROMPTS PADRONIZADOS
 // ============================================================
-async function lerPDFcomIA(textoBruto, chaves, modeloPreferencia) {
+async function lerPDFcomIA(textoBruto, chaves, modeloPreferencia, dadosBOPrioritarios = null) {
+    const blocoBOPrioritario = dadosBOPrioritarios && dadosBOPrioritarios.encontrado
+        ? `
+
+=== DADOS PRIORIZADOS EXTRAÍDOS AUTOMATICAMENTE DO BO ===
+Origem: ${dadosBOPrioritarios.origem || "não identificada"}
+Data/hora do registro do BO: ${dadosBOPrioritarios.dataRegistro || "não localizado"}
+Data/hora do fato no BO: ${dadosBOPrioritarios.dataFato || "não localizado"}
+Tempo decorrido entre fato e registro: ${dadosBOPrioritarios.tempoDecorrido || "não localizado"}
+
+INSTRUÇÃO ABSOLUTA:
+- Para campoB_bo e campoG_cronometria, use literalmente os valores acima quando estiverem presentes.
+- Não substitua a data/hora do registro pela data/hora do fato.
+- Se houver divergência entre narrativa e cabeçalho do BO, preserve o cabeçalho do BO para "Data/hora do registro".
+`
+        : "";
+
     const promptSistema = `Você é um Analista Jurídico Sênior especializado em auditoria de processos criminais digitais do e-SAJ e PJe.
 Sua função é analisar autos criminais em PDF e produzir um relatório técnico, objetivo, imparcial e estritamente fiel ao conteúdo efetivamente localizado.
 
@@ -185,6 +446,10 @@ REGRAS ABSOLUTAS:
 6. Registre divergências entre peças de modo neutro.
 7. Retorne ÚNICO E EXCLUSIVAMENTE UM OBJETO JSON VÁLIDO.
 8. Use quebras de linha (\\n) para estruturar os tópicos no JSON.
+9. Diferencie obrigatoriamente:
+   - "Data/hora do registro" = momento em que a ocorrência foi registrada.
+   - "Data/hora do fato" = momento em que o fato ocorreu.
+10. Nunca preencha "Data/hora do registro" com a "Data/hora do fato".
 
 FORMATO EXATO DE SAÍDA ESPERADA:
 {
@@ -200,92 +465,206 @@ FORMATO EXATO DE SAÍDA ESPERADA:
   "relatorioFatos": "DOS FATOS\\nTrata-se de ação penal em que o Ministério Público imputou ao(s) denunciado(s) a prática, em tese, das infrações penais previstas no(s) art.(s) [X], conforme denúncia de [PÁGINAS X-Y]. A pena em abstrato, na redação vigente à data do fato ([Lei]), é de [Mínima] a [Máxima].\\nConsta na denúncia que, em [Data], na cidade de [Cidade/UF], no local [Local], o acusado, em tese, teria praticado [Verbos nucleares], em desfavor de [Vítima], conforme narrativa acusatória de [PÁGINAS X-Y].\\nA denúncia foi recebida em [Data], extraída da assinatura digital em [PÁGINA X].\\nNa fase de instrução, foram efetivamente ouvidas as testemunhas [Nomes] [PÁGINAS X-Y]. [Registrar testemunhas não ouvidas]. O acusado [foi interrogado em PÁGINA X / teve a revelia decretada].\\nAo final da instrução, o Ministério Público apresentou alegações finais postulando [Pedido], conforme [PÁGINAS X-Y].\\nA defesa apresentou alegações finais postulando [Pedido ou não localizado].\\nÉ o breve relato dos fatos."
 }`;
 
-    let logErros = [], detalhesJSON = null, motorUtilizado = null;
-    const ordemCaminhos = modeloPreferencia === 'claude' ? ['claude', 'gemini', 'groq'] :
-                          modeloPreferencia === 'groq' ? ['groq', 'claude', 'gemini'] :
-                          ['gemini', 'claude', 'groq'];
+    let logErros = [];
+    let detalhesJSON = null;
+    let motorUtilizado = null;
+
+    const ordemCaminhos =
+        modeloPreferencia === "claude" ? ["claude", "gemini", "groq"] :
+        modeloPreferencia === "groq" ? ["groq", "claude", "gemini"] :
+        ["gemini", "claude", "groq"];
+
+    const entradaCompleta = `${promptSistema}${blocoBOPrioritario}\n\n=== TEXTO DO PROCESSO ===\n${textoBruto}`;
 
     for (const motor of ordemCaminhos) {
         try {
-            if (motor === 'gemini') {
-                if (!chaves.gemini) { logErros.push(`[GEMINI] Sem chave`); continue; }
-                // Modelo Gemini atualizado para um ID suportado atualmente
-                const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${MODELOS_IA.GEMINI_ANALISE}:generateContent?key=${chaves.gemini}`, {
-                    contents: [{ parts: [{ text: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }] }],
-                    generationConfig: { responseMimeType: "application/json" }
-                }, { headers: { 'Content-Type': 'application/json' } });
-                
-                let textoLimpoGemini = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-                detalhesJSON = extrairJSON(textoLimpoGemini);
-                motorUtilizado = 'GEMINI'; break;
-            }
-            else if (motor === 'claude') {
-                if (!chaves.claude) { logErros.push(`[CLAUDE] Sem chave`); continue; }
-                // Modelo Claude atualizado para um ID ativo atualmente
-                const res = await axios.post('https://api.anthropic.com/v1/messages', {
-                    model: MODELOS_IA.CLAUDE_ANALISE, max_tokens: 8000,
-                    messages: [{ role: "user", content: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }]
-                }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
-                detalhesJSON = extrairJSON(res.data.content[0].text); motorUtilizado = 'CLAUDE'; break;
-            }
-            else if (motor === 'groq') {
-                if (!chaves.groq) { logErros.push(`[GROQ] Sem chave`); continue; }
-                
-                // Alerta se o processo for maior que a capacidade da Groq
-                const entradaGroq = `${promptSistema}\n\n=== TEXTO DO PROCESSO ===\n${textoBruto}`;
-                if (excedeJanelaGroq(entradaGroq)) {
-                    logErros.push(`[GROQ] Entrada estimada em ${estimarTokens(entradaGroq)} tokens; acima do limite seguro configurado para ${MODELOS_IA.GROQ_CHAT}.`);
+            if (motor === "gemini") {
+                if (!chaves.gemini) {
+                    logErros.push("[GEMINI] Sem chave");
                     continue;
                 }
 
-                const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-                    model: MODELOS_IA.GROQ_CHAT,
-                    messages: [{ role: "system", content: promptSistema }, { role: "user", content: textoBruto }],
-                    response_format: { type: "json_object" }, temperature: 0.1
-                }, { headers: { 'Authorization': `Bearer ${chaves.groq}` } });
-                detalhesJSON = extrairJSON(res.data.choices[0].message.content); motorUtilizado = 'GROQ'; break;
+                const res = await axios.post(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${MODELOS_IA.GEMINI_ANALISE}:generateContent?key=${chaves.gemini}`,
+                    {
+                        contents: [{ parts: [{ text: entradaCompleta }] }],
+                        generationConfig: { responseMimeType: "application/json" }
+                    },
+                    { headers: { "Content-Type": "application/json" } }
+                );
+
+                const textoLimpoGemini = (res.data.candidates?.[0]?.content?.parts?.[0]?.text || "")
+                    .replace(/```json/g, "")
+                    .replace(/```/g, "")
+                    .trim();
+
+                detalhesJSON = extrairJSON(textoLimpoGemini);
+                motorUtilizado = "GEMINI";
+                break;
+            }
+
+            if (motor === "claude") {
+                if (!chaves.claude) {
+                    logErros.push("[CLAUDE] Sem chave");
+                    continue;
+                }
+
+                const res = await axios.post(
+                    "https://api.anthropic.com/v1/messages",
+                    {
+                        model: MODELOS_IA.CLAUDE_ANALISE,
+                        max_tokens: 8000,
+                        messages: [{ role: "user", content: entradaCompleta }]
+                    },
+                    {
+                        headers: {
+                            "x-api-key": chaves.claude,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json"
+                        }
+                    }
+                );
+
+                detalhesJSON = extrairJSON(res.data.content[0].text);
+                motorUtilizado = "CLAUDE";
+                break;
+            }
+
+            if (motor === "groq") {
+                if (!chaves.groq) {
+                    logErros.push("[GROQ] Sem chave");
+                    continue;
+                }
+
+                if (excedeJanelaGroq(entradaCompleta)) {
+                    logErros.push(
+                        `[GROQ] Entrada estimada em ${estimarTokens(entradaCompleta)} tokens; acima do limite seguro configurado para ${MODELOS_IA.GROQ_CHAT}.`
+                    );
+                    continue;
+                }
+
+                const res = await axios.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    {
+                        model: MODELOS_IA.GROQ_CHAT,
+                        messages: [
+                            { role: "system", content: promptSistema + blocoBOPrioritario },
+                            { role: "user", content: textoBruto }
+                        ],
+                        response_format: { type: "json_object" },
+                        temperature: 0.1
+                    },
+                    { headers: { Authorization: `Bearer ${chaves.groq}` } }
+                );
+
+                detalhesJSON = extrairJSON(res.data.choices[0].message.content);
+                motorUtilizado = "GROQ";
+                break;
             }
         } catch (e) {
-            const msgErro = e.response && e.response.data && e.response.data.error ? e.response.data.error.message : e.message;
+            const msgErro =
+                e.response && e.response.data && e.response.data.error
+                    ? e.response.data.error.message
+                    : e.message;
+
             logErros.push(`[${motor.toUpperCase()}] Falhou: ${msgErro}`);
         }
     }
 
-    if (!detalhesJSON) throw new Error(`As APIs falharam ao processar o texto.\n\nMOTIVOS REAIS:\n${logErros.join('\n')}`);
+    if (!detalhesJSON) {
+        throw new Error(`As APIs falharam ao processar o texto.\n\nMOTIVOS REAIS:\n${logErros.join("\n")}`);
+    }
+
     return { detalhesJSON, motorUtilizado, logErros };
 }
 
 // ============================================================
 // ROTAS DE AUDITORIA PDF
 // ============================================================
-app.post('/extrair-texto', uploadPDF.single('file'), async (req, res) => {
+app.post("/extrair-texto", uploadPDF.single("file"), async (req, res) => {
     req.setTimeout(0);
+
     try {
-        if (!req.file) return res.status(400).json({ erro: "Arquivo ausente." });
+        if (!req.file) {
+            return res.status(400).json({ erro: "Arquivo ausente." });
+        }
+
         const { customManter, customIgnorar } = req.body;
-        const { textoConsolidado, aceitos, removidos } = await extrairTextoFiltrado(req.file.buffer, req.file.originalname, customManter, customIgnorar);
-        if (!textoConsolidado) return res.status(400).json({ erro: "Todos os PDFs foram filtrados como irrelevantes." });
-        const textoLimpo = textoConsolidado.replace(/\s+/g, ' ').trim();
-        res.json({ status: "sucesso", totalAceitos: aceitos.length, totalRemovidos: removidos.length, aceitos, removidos, caracteres: textoLimpo.length, textoLimpo });
-    } catch (e) { res.status(500).json({ erro: e.message }); }
+        const { textoConsolidado, pecasExtraidas, aceitos, removidos } =
+            await extrairTextoFiltrado(req.file.buffer, req.file.originalname, customManter, customIgnorar);
+
+        if (!textoConsolidado) {
+            return res.status(400).json({ erro: "Todos os PDFs foram filtrados como irrelevantes." });
+        }
+
+        const dadosBOPrioritarios = extrairDadosBOPrioritarios(pecasExtraidas, textoConsolidado);
+        const textoLimpoPreview = textoConsolidado.replace(/\s+/g, " ").trim();
+
+        res.json({
+            status: "sucesso",
+            totalAceitos: aceitos.length,
+            totalRemovidos: removidos.length,
+            aceitos,
+            removidos,
+            caracteres: textoLimpoPreview.length,
+            textoLimpo: textoLimpoPreview,
+            boPrioritario: dadosBOPrioritarios.encontrado ? dadosBOPrioritarios : null
+        });
+    } catch (e) {
+        res.status(500).json({ erro: e.message });
+    }
 });
 
-app.post('/analisar', uploadPDF.single('file'), async (req, res) => {
+app.post("/analisar", uploadPDF.single("file"), async (req, res) => {
     req.setTimeout(0);
+
     try {
-        if (!req.file) return res.status(400).json({ erro: "Arquivo ausente." });
+        if (!req.file) {
+            return res.status(400).json({ erro: "Arquivo ausente." });
+        }
+
         const chaves = getKeys();
-        if (!chaves) return res.status(403).json({ erro: "Cofre Neural vazio. Cadastre as chaves de API." });
+        if (!chaves) {
+            return res.status(403).json({ erro: "Cofre Neural vazio. Cadastre as chaves de API." });
+        }
+
         const { customManter, customIgnorar, modelo } = req.body;
 
-        const { textoConsolidado, aceitos, removidos } = await extrairTextoFiltrado(req.file.buffer, req.file.originalname, customManter, customIgnorar);
-        if (!textoConsolidado) return res.status(400).json({ erro: "Todos os PDFs foram filtrados como lixo processual." });
+        const { textoConsolidado, pecasExtraidas, aceitos, removidos } =
+            await extrairTextoFiltrado(req.file.buffer, req.file.originalname, customManter, customIgnorar);
 
-        const { detalhesJSON, motorUtilizado } = await lerPDFcomIA(textoConsolidado.replace(/\s+/g, ' '), chaves, modelo);
-        let avisoFallback = (modelo && motorUtilizado.toLowerCase() !== modelo.toLowerCase()) ? `A IA solicitada falhou. O motor de redundância assumiu e a extração foi feita com sucesso pelo ${motorUtilizado}.` : null;
+        if (!textoConsolidado) {
+            return res.status(400).json({ erro: "Todos os PDFs foram filtrados como lixo processual." });
+        }
 
-        res.json({ status: "sucesso", detalhes: detalhesJSON, arquivosLidos: aceitos, arquivosIgnorados: removidos, aviso: avisoFallback, motor: motorUtilizado });
-    } catch (e) { res.status(500).json({ erro: e.message }); }
+        const dadosBOPrioritarios = extrairDadosBOPrioritarios(pecasExtraidas, textoConsolidado);
+
+        const { detalhesJSON, motorUtilizado } = await lerPDFcomIA(
+            textoConsolidado,
+            chaves,
+            modelo,
+            dadosBOPrioritarios
+        );
+
+        const detalhesFinal = aplicarPrioridadeBOAoJSON(detalhesJSON, dadosBOPrioritarios);
+
+        const avisoFallback =
+            modelo && motorUtilizado.toLowerCase() !== modelo.toLowerCase()
+                ? `A IA solicitada falhou. O motor de redundância assumiu e a extração foi feita com sucesso pelo ${motorUtilizado}.`
+                : null;
+
+        res.json({
+            status: "sucesso",
+            detalhes: detalhesFinal,
+            arquivosLidos: aceitos,
+            arquivosIgnorados: removidos,
+            aviso: avisoFallback,
+            motor: motorUtilizado,
+            boPrioritario: dadosBOPrioritarios.encontrado ? dadosBOPrioritarios : null
+        });
+    } catch (e) {
+        res.status(500).json({ erro: e.message });
+    }
 });
 
 // ============================================================
