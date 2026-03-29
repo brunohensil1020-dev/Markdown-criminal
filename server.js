@@ -176,17 +176,20 @@ FORMATO EXATO DE SAÍDA ESPERADA:
         try {
             if (motor === 'gemini') {
                 if (!chaves.gemini) { logErros.push(`[GEMINI] Sem chave`); continue; }
-                const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${chaves.gemini}`, {
+                // ATUALIZADO PARA O GEMINI 2.0 FLASH (Suporta processos gigantes)
+                const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaves.gemini}`, {
                     contents: [{ parts: [{ text: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }] }],
                     generationConfig: { responseMimeType: "application/json" }
                 }, { headers: { 'Content-Type': 'application/json' } });
-                detalhesJSON = extrairJSON(res.data.candidates[0].content.parts[0].text);
+                let textoLimpoGemini = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
+                detalhesJSON = extrairJSON(textoLimpoGemini);
                 motorUtilizado = 'GEMINI'; break;
             }
             else if (motor === 'claude') {
                 if (!chaves.claude) { logErros.push(`[CLAUDE] Sem chave`); continue; }
+                // ATUALIZADO PARA A VERSÃO UNIVERSAL DE JUNHO
                 const res = await axios.post('https://api.anthropic.com/v1/messages', {
-                    model: "claude-3-5-sonnet-20241022", max_tokens: 8000,
+                    model: "claude-3-5-sonnet-20240620", max_tokens: 8000,
                     messages: [{ role: "user", content: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }]
                 }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
                 detalhesJSON = extrairJSON(res.data.content[0].text); motorUtilizado = 'CLAUDE'; break;
@@ -377,13 +380,14 @@ app.post('/estrategia', express.json(), async (req, res) => {
             try {
                 if (motor === 'claude' && chaves.claude) {
                     const res = await axios.post('https://api.anthropic.com/v1/messages', {
-                        model: "claude-3-5-sonnet-20241022", max_tokens: 4000,
+                        model: "claude-3-5-sonnet-20240620", max_tokens: 4000, // <-- AQUI
                         messages: [{ role: "user", content: promptEstrategico }]
                     }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
                     dadosEstrategia = extrairJSON(res.data.content[0].text); break;
                 }
                 else if (motor === 'gemini' && chaves.gemini) {
-                    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${chaves.gemini}`, {
+                    // ATUALIZADO PARA O GEMINI 2.0 FLASH <-- AQUI
+                    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaves.gemini}`, {
                         contents: [{ parts: [{ text: promptEstrategico }] }],
                         generationConfig: { responseMimeType: "application/json" }
                     }, { headers: { 'Content-Type': 'application/json' } });
@@ -410,13 +414,15 @@ app.post('/estrategia', express.json(), async (req, res) => {
 
 async function chamarClaude(prompt, chave) {
     const res = await axios.post('https://api.anthropic.com/v1/messages', {
-        model: "claude-3-5-sonnet-20241022", max_tokens: 4000,
+        model: "claude-3-5-sonnet-20240620", max_tokens: 4000, // <-- AQUI
         messages: [{ role: "user", content: prompt }]
     }, { headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
     return res.data.content[0].text;
 }
+
 async function chamarGemini(prompt, chave) {
-    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${chave}`, {
+    // ATUALIZADO PARA O GEMINI 2.0 FLASH <-- AQUI
+    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chave}`, {
         contents: [{ parts: [{ text: prompt }] }]
     }, { headers: { 'Content-Type': 'application/json' } });
     return res.data.candidates[0].content.parts[0].text;
