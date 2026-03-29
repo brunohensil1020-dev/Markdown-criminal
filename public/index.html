@@ -57,6 +57,7 @@
         <button class="tab-btn" onclick="switchTab('tab-transcricao', this)">🎙️ TRANSCRIÇÃO MULTIPLA</button>
         <button class="tab-btn" onclick="switchTab('tab-lab', this)">🧪 LAB TRAINING</button>
         <button class="tab-btn" onclick="switchTab('tab-cofre', this)">🔐 COFRE API</button>
+        <button class="tab-btn" onclick="switchTab('tab-requisitos', this)">⚙️ REQUISITOS E DOWNLOADS</button>
     </div>
 
     <div class="config-box" id="configBox">
@@ -157,6 +158,47 @@
                 <input type="text" id="apiGemini" placeholder="Google Gemini" style="margin-bottom: 10px; width: 350px;">
                 <input type="text" id="apiEscavador" placeholder="API Escavador" style="margin-bottom: 20px; width: 350px;">
                 <button class="btn-acao" onclick="salvarSecrets()" style="width: 350px;">ATUALIZAR COFRE NEURAL</button>
+            </div>
+        </div>
+
+        <div id="tab-requisitos" class="tab-content" style="height: auto; align-items:center;">
+            <div class="painel-matte" style="text-align:center; max-width: 700px; margin: 20px auto; display: flex; flex-direction: column; align-items: center;">
+                <h2 style="color:#2b5797; text-indent:0; margin-bottom: 10px; font-family:'Segoe UI', sans-serif;">🛠️ REQUISITOS DO SISTEMA</h2>
+                <p style="text-indent:0; color:#555; margin-bottom: 30px; font-size:14px;">Baixe as ferramentas essenciais para rodar o painel de auditoria no seu computador.</p>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; width:100%; text-align:left;">
+                    <div style="background:rgba(255,255,255,0.4); padding:20px; border-radius:8px; border-left:5px solid #1e7e34;">
+                        <h3 style="margin-top:0; color:#1e7e34; text-indent:0; font-size:16px;">🟢 Node.js (Obrigatório)</h3>
+                        <p style="text-indent:0; font-size:13px; color:#444;">O cérebro do servidor. Responsável por rodar o aplicativo e processar as extrações.</p>
+                        <a href="https://nodejs.org/" target="_blank" style="text-decoration:none;">
+                            <button class="btn-acao" style="width:100%; margin:0; font-size:13px; background:#1e7e34; color:#fff;">⬇️ Baixar Node.js</button>
+                        </a>
+                    </div>
+                    
+                    <div style="background:rgba(255,255,255,0.4); padding:20px; border-radius:8px; border-left:5px solid #2b5797;">
+                        <h3 style="margin-top:0; color:#2b5797; text-indent:0; font-size:16px;">🔵 Git (Obrigatório)</h3>
+                        <p style="text-indent:0; font-size:13px; color:#444;">Controle de versão para baixar o projeto inicial e atualizar via terminal.</p>
+                        <a href="https://git-scm.com/downloads" target="_blank" style="text-decoration:none;">
+                            <button class="btn-acao" style="width:100%; margin:0; font-size:13px; background:#2b5797; color:#fff;">⬇️ Baixar Git</button>
+                        </a>
+                    </div>
+
+                    <div style="background:rgba(255,255,255,0.4); padding:20px; border-radius:8px; border-left:5px solid #d39e00;">
+                        <h3 style="margin-top:0; color:#d39e00; text-indent:0; font-size:16px;">🟡 VS Code (Obrigatório)</h3>
+                        <p style="text-indent:0; font-size:13px; color:#444;">O melhor terminal e editor de código em um único programa de alta performance.</p>
+                        <a href="https://code.visualstudio.com/" target="_blank" style="text-decoration:none;">
+                            <button class="btn-acao" style="width:100%; margin:0; font-size:13px; background:#d39e00; color:#000;">⬇️ Baixar VS Code</button>
+                        </a>
+                    </div>
+
+                    <div style="background:rgba(255,255,255,0.4); padding:20px; border-radius:8px; border-left:5px solid #8e44ad;">
+                        <h3 style="margin-top:0; color:#8e44ad; text-indent:0; font-size:16px;">🟣 Python (Opcional)</h3>
+                        <p style="text-indent:0; font-size:13px; color:#444;">Necessário apenas caso queira operar os scripts forenses offlines de divisão de PDF.</p>
+                        <a href="https://www.python.org/downloads/" target="_blank" style="text-decoration:none;">
+                            <button class="btn-acao" style="width:100%; margin:0; font-size:13px; background:#8e44ad; color:#fff;">⬇️ Baixar Python 3</button>
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
