@@ -41,6 +41,26 @@ const uploadPDF = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
 const uploadAudio = multer({ dest: UPLOADS_DIR, limits: { fileSize: 1000 * 1024 * 1024 } });
 const SECRETS_PATH = path.join(SECRETS_DIR, 'keys.json');
 
+
+const MODELOS_IA = {
+    GEMINI_ANALISE: process.env.GEMINI_MODEL_ANALISE || 'gemini-2.5-flash',
+    GEMINI_PECA: process.env.GEMINI_MODEL_PECA || process.env.GEMINI_MODEL_ANALISE || 'gemini-2.5-flash',
+    CLAUDE_ANALISE: process.env.CLAUDE_MODEL_ANALISE || 'claude-sonnet-4-20250514',
+    CLAUDE_PECA: process.env.CLAUDE_MODEL_PECA || process.env.CLAUDE_MODEL_ANALISE || 'claude-sonnet-4-20250514',
+    GROQ_CHAT: process.env.GROQ_CHAT_MODEL || 'llama-3.3-70b-versatile',
+    GROQ_TRANSCRICAO: process.env.GROQ_TRANSCRICAO_MODEL || 'whisper-large-v3-turbo'
+};
+const GROQ_CONTEXT_WINDOW_TOKENS = 131072;
+const GROQ_SAFE_INPUT_TOKENS = 110000;
+
+function estimarTokens(texto) {
+    return Math.ceil(((texto || '').length) / 4);
+}
+
+function excedeJanelaGroq(texto) {
+    return estimarTokens(texto) > GROQ_SAFE_INPUT_TOKENS;
+}
+
 // ============================================================
 // COFRE NEURAL E SEGURANÇA
 // ============================================================
@@ -61,7 +81,20 @@ app.get('/status-cofre', (req, res) => {
     res.json({ groq: !!chaves.groq, assembly: !!chaves.assembly, claude: !!chaves.claude, gemini: !!chaves.gemini, escavador: !!chaves.escavador });
 });
 
-const getKeys = () => fs.existsSync(SECRETS_PATH) ? JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8')) : null;
+const getKeys = () => {
+    let chaves = {};
+    if (fs.existsSync(SECRETS_PATH)) {
+        try { chaves = JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8')); } catch (e) {}
+    }
+    // Autocaptura de chaves do ambiente (process.env)
+    return {
+        groq: chaves.groq || process.env.GROQ_API_KEY || null,
+        assembly: chaves.assembly || process.env.ASSEMBLYAI_API_KEY || null,
+        claude: chaves.claude || process.env.ANTHROPIC_API_KEY || null,
+        gemini: chaves.gemini || process.env.GEMINI_API_KEY || null,
+        escavador: chaves.escavador || process.env.ESCAVADOR_API_KEY || null
+    };
+};
 function apagarArquivos(...caminhos) { caminhos.forEach(c => { if (c && fs.existsSync(c)) fs.unlink(c, () => {}); }); }
 
 // ============================================================
@@ -176,8 +209,8 @@ FORMATO EXATO DE SAÍDA ESPERADA:
         try {
             if (motor === 'gemini') {
                 if (!chaves.gemini) { logErros.push(`[GEMINI] Sem chave`); continue; }
-                // ATUALIZADO PARA GEMINI 1.5 FLASH (1 Milhão de Tokens)
-                const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaves.gemini}`, {
+                // Modelo Gemini atualizado para um ID suportado atualmente
+                const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${MODELOS_IA.GEMINI_ANALISE}:generateContent?key=${chaves.gemini}`, {
                     contents: [{ parts: [{ text: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }] }],
                     generationConfig: { responseMimeType: "application/json" }
                 }, { headers: { 'Content-Type': 'application/json' } });
@@ -188,9 +221,9 @@ FORMATO EXATO DE SAÍDA ESPERADA:
             }
             else if (motor === 'claude') {
                 if (!chaves.claude) { logErros.push(`[CLAUDE] Sem chave`); continue; }
-                // ATUALIZADO PARA CLAUDE 3.5 OUTUBRO
+                // Modelo Claude atualizado para um ID ativo atualmente
                 const res = await axios.post('https://api.anthropic.com/v1/messages', {
-                    model: "claude-3-5-sonnet-20241022", max_tokens: 8000,
+                    model: MODELOS_IA.CLAUDE_ANALISE, max_tokens: 8000,
                     messages: [{ role: "user", content: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }]
                 }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
                 detalhesJSON = extrairJSON(res.data.content[0].text); motorUtilizado = 'CLAUDE'; break;
@@ -199,13 +232,14 @@ FORMATO EXATO DE SAÍDA ESPERADA:
                 if (!chaves.groq) { logErros.push(`[GROQ] Sem chave`); continue; }
                 
                 // Alerta se o processo for maior que a capacidade da Groq
-                if (textoBruto.length > 25000) {
-                    logErros.push(`[GROQ] O texto (${textoBruto.length} caracteres) excede o limite. Tente o Gemini.`);
-                    continue; // Força o Fallback para o Gemini/Claude em vez de ler pela metade
+                const entradaGroq = `${promptSistema}\n\n=== TEXTO DO PROCESSO ===\n${textoBruto}`;
+                if (excedeJanelaGroq(entradaGroq)) {
+                    logErros.push(`[GROQ] Entrada estimada em ${estimarTokens(entradaGroq)} tokens; acima do limite seguro configurado para ${MODELOS_IA.GROQ_CHAT}.`);
+                    continue;
                 }
 
                 const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-                    model: "llama-3.3-70b-versatile",
+                    model: MODELOS_IA.GROQ_CHAT,
                     messages: [{ role: "system", content: promptSistema }, { role: "user", content: textoBruto }],
                     response_format: { type: "json_object" }, temperature: 0.1
                 }, { headers: { 'Authorization': `Bearer ${chaves.groq}` } });
@@ -275,7 +309,7 @@ async function processarArquivoAudio(file, model, chaves) {
         if (model.includes('whisper')) {
             const fd = new FormData();
             fd.append('file', fs.createReadStream(outputPath));
-            fd.append('model', model);
+            fd.append('model', model || MODELOS_IA.GROQ_TRANSCRICAO);
             fd.append('response_format', 'verbose_json');
             fd.append('language', 'pt');
 
@@ -298,7 +332,10 @@ async function processarArquivoAudio(file, model, chaves) {
             });
 
             const transcriptRes = await axios.post('https://api.assemblyai.com/v2/transcript', {
-                audio_url: uploadRes.data.upload_url, speaker_labels: true, language_code: 'pt'
+                audio_url: uploadRes.data.upload_url,
+                speaker_labels: true,
+                language_detection: true,
+                speech_models: ['universal-3-pro', 'universal-2']
             }, { headers: { 'Authorization': chaves.assembly } });
 
             let tId = transcriptRes.data.id;
@@ -387,14 +424,13 @@ app.post('/estrategia', express.json(), async (req, res) => {
             try {
                 if (motor === 'claude' && chaves.claude) {
                     const res = await axios.post('https://api.anthropic.com/v1/messages', {
-                        model: "claude-3-5-sonnet-20241022", max_tokens: 4000,
+                        model: MODELOS_IA.CLAUDE_PECA, max_tokens: 4000,
                         messages: [{ role: "user", content: promptEstrategico }]
                     }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
                     dadosEstrategia = extrairJSON(res.data.content[0].text); break;
                 }
                 else if (motor === 'gemini' && chaves.gemini) {
-                    // ATUALIZADO PARA GEMINI 1.5 FLASH
-                    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaves.gemini}`, {
+                    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${MODELOS_IA.GEMINI_ANALISE}:generateContent?key=${chaves.gemini}`, { // <-- 1.5 PRO
                         contents: [{ parts: [{ text: promptEstrategico }] }],
                         generationConfig: { responseMimeType: "application/json" }
                     }, { headers: { 'Content-Type': 'application/json' } });
@@ -402,12 +438,12 @@ app.post('/estrategia', express.json(), async (req, res) => {
                 }
                 else if (motor === 'groq' && chaves.groq) {
                     // A TRAVA DE SEGURANÇA: Se o texto for maior que o limite gratuito, force o Fallback para Gemini/Claude
-                    if (promptEstrategico.length > 25000) {
-                        logErros.push(`[GROQ] O texto de cruzamento (${promptEstrategico.length} caracteres) excede o limite. Acionando Fallback.`);
+                    if (excedeJanelaGroq(promptEstrategico)) {
+                        logErros.push(`[GROQ] Texto de cruzamento estimado em ${estimarTokens(promptEstrategico)} tokens; acima do limite seguro configurado para ${MODELOS_IA.GROQ_CHAT}.`);
                         continue; 
                     }
                     const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-                        model: "llama-3.3-70b-versatile", 
+                        model: MODELOS_IA.GROQ_CHAT, 
                         messages: [{ role: "user", content: promptEstrategico }], 
                         response_format: { type: "json_object" }, temperature: 0.2
                     }, { headers: { 'Authorization': `Bearer ${chaves.groq}` } });
@@ -426,22 +462,29 @@ app.post('/estrategia', express.json(), async (req, res) => {
 
 async function chamarClaude(prompt, chave) {
     const res = await axios.post('https://api.anthropic.com/v1/messages', {
-        model: "claude-3-5-sonnet-20241022", max_tokens: 4000,
+        model: MODELOS_IA.CLAUDE_PECA,
+        max_tokens: 4000,
         messages: [{ role: "user", content: prompt }]
     }, { headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
     return res.data.content[0].text;
 }
 
 async function chamarGemini(prompt, chave) {
-    // ATUALIZADO PARA GEMINI 1.5 FLASH
-    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chave}`, {
+    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${MODELOS_IA.GEMINI_PECA}:generateContent?key=${chave}`, {
         contents: [{ parts: [{ text: prompt }] }]
     }, { headers: { 'Content-Type': 'application/json' } });
     return res.data.candidates[0].content.parts[0].text;
 }
+
 async function chamarGroqLlama(prompt, chave) {
+    if (excedeJanelaGroq(prompt)) {
+        throw new Error(`Entrada grande demais para ${MODELOS_IA.GROQ_CHAT}: ${estimarTokens(prompt)} tokens estimados.`);
+    }
+
     const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-        model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: prompt }], temperature: 0.3
+        model: MODELOS_IA.GROQ_CHAT,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3
     }, { headers: { 'Authorization': `Bearer ${chave}` } });
     return res.data.choices[0].message.content;
 }
@@ -470,4 +513,14 @@ app.post('/redigir-peca', express.json(), async (req, res) => {
     } catch (e) { res.status(500).json({ erro: "Erro Crítico." }); }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log(`Cockpit Neural Online`));
+app.listen(process.env.PORT || 3000, () => {
+    console.log(`Cockpit Neural Online na porta ${process.env.PORT || 3000}`);
+    const chavesStatus = getKeys() || {};
+    console.log('--- STATUS DO COFRE (secrets/keys.json) ---');
+    console.log(`[GROQ]: ${chavesStatus.groq ? 'ATIVA ✅' : 'AUSENTE ❌'}`);
+    console.log(`[ASSEMBLY_AI]: ${chavesStatus.assembly ? 'ATIVA ✅' : 'AUSENTE ❌'}`);
+    console.log(`[CLAUDE]: ${chavesStatus.claude ? 'ATIVA ✅' : 'AUSENTE ❌'}`);
+    console.log(`[GEMINI]: ${chavesStatus.gemini ? 'ATIVA ✅' : 'AUSENTE ❌'}`);
+    console.log(`[ESCAVADOR]: ${chavesStatus.escavador ? 'ATIVA ✅' : 'AUSENTE ❌'}`);
+    console.log('-------------------------------------------');
+});
