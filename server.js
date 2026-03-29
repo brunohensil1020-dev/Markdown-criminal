@@ -12,9 +12,24 @@ const ffmpegPath = require('ffmpeg-static');
 
 const app = express();
 app.use(cors());
-app.use(express.static(__dirname));
 app.use(express.json({ limit: '1000mb' }));
 app.use(express.urlencoded({ limit: '1000mb', extended: true }));
+
+// Mantém a pasta public fechada e segura para arquivos estáticos futuros
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ============================================================
+// SOLUÇÃO CRÍTICA: ROTA PRINCIPAL (FIM DO "CANNOT GET /")
+// ============================================================
+app.get('/', (req, res) => {
+    const indexPath = path.join(__dirname, 'index.html');
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+    } else {
+        res.status(404).send("Painel não encontrado.");
+    }
+});
+// ============================================================
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const SECRETS_DIR = path.join(__dirname, 'secrets');
@@ -335,31 +350,62 @@ const BIBLIOTECA_VERBOS = [
 ];
 
 app.post('/estrategia', express.json(), async (req, res) => {
+    req.setTimeout(0); // Essencial para o Lab Training não esgotar o tempo
     try {
         const { relatorio, transcricoesLimpas } = req.body;
         const chaves = getKeys();
-        if (!chaves || !chaves.groq) return res.status(403).json({ erro: "Chave Groq necessária para Estratégia." });
+        if (!chaves) return res.status(403).json({ erro: "Cofre Neural vazio. Cadastre as chaves." });
 
         const promptEstrategico = `Você é um Advogado Criminalista Sênior. Cruze o Relatório PDF e as Transcrições Integrais em anexo.
         BIBLIOTECA DE VERBOS NUCLEARES: ${BIBLIOTECA_VERBOS.join(", ")}.
         
-        Sua missão é filtrar a transcrição e mapear APENAS as ações físicas. Retorne um JSON:
+        Sua missão é cruzar a transcrição com a denúncia e mapear APENAS as ações. Retorne ÚNICO E EXCLUSIVAMENTE UM JSON:
         {
           "pecaCabivel": "Analise o último despacho e diga a PEÇA e o FUNDAMENTO LEGAL.",
-          "resumoVerbos": "Filtre a transcrição integral e foque EXCLUSIVAMENTE nos verbos criminais da biblioteca. O que o réu fez no BO vs o que a transcrição provou?",
+          "resumoVerbos": "O que o réu fez segundo a denúncia vs o que a transcrição provou?",
           "contradicoes": "Aponte contradições baseadas estritamente nas ações físicas.",
-          "tesesDefesa": "Sugira teses de defesa (Atipicidade, Insuficiência, etc)."
+          "tesesDefesa": "Sugira teses de defesa reais (Atipicidade, Insuficiência probatória art 386 CPP, etc)."
         }
         RELATÓRIO: ${JSON.stringify(relatorio)}
         TRANSCRIÇÕES: ${JSON.stringify(transcricoesLimpas)}`;
 
-        const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-            model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: promptEstrategico }],
-            response_format: { type: "json_object" }, temperature: 0.2
-        }, { headers: { 'Authorization': `Bearer ${chaves.groq}` }, timeout: 60000 });
+        const ordemCaminhos = ['claude', 'gemini', 'groq'];
+        let dadosEstrategia = null;
+        let logErros = [];
 
-        res.json({ status: "sucesso", dados: extrairJSON(response.data.choices[0].message.content) });
-    } catch (e) { res.status(500).json({ erro: "Falha na geração da Estratégia." }); }
+        for (const motor of ordemCaminhos) {
+            try {
+                if (motor === 'claude' && chaves.claude) {
+                    const res = await axios.post('https://api.anthropic.com/v1/messages', {
+                        model: "claude-3-5-sonnet-20241022", max_tokens: 4000,
+                        messages: [{ role: "user", content: promptEstrategico }]
+                    }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
+                    dadosEstrategia = extrairJSON(res.data.content[0].text); break;
+                }
+                else if (motor === 'gemini' && chaves.gemini) {
+                    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${chaves.gemini}`, {
+                        contents: [{ parts: [{ text: promptEstrategico }] }],
+                        generationConfig: { responseMimeType: "application/json" }
+                    }, { headers: { 'Content-Type': 'application/json' } });
+                    dadosEstrategia = extrairJSON(res.data.candidates[0].content.parts[0].text); break;
+                }
+                else if (motor === 'groq' && chaves.groq) {
+                    const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
+                        model: "llama-3.3-70b-versatile", 
+                        messages: [{ role: "user", content: promptEstrategico.substring(0, 15000) }], 
+                        response_format: { type: "json_object" }, temperature: 0.2
+                    }, { headers: { 'Authorization': `Bearer ${chaves.groq}` } });
+                    dadosEstrategia = extrairJSON(res.data.choices[0].message.content); break;
+                }
+            } catch (e) {
+                logErros.push(`[${motor.toUpperCase()}]`);
+            }
+        }
+
+        if (!dadosEstrategia) return res.status(500).json({ erro: `Falha na Inteligência Estratégica. Tentativas frustradas: ${logErros.join(' -> ')}` });
+        
+        res.json({ status: "sucesso", dados: dadosEstrategia });
+    } catch (e) { res.status(500).json({ erro: "Falha geral na geração da Estratégia." }); }
 });
 
 async function chamarClaude(prompt, chave) {
@@ -383,6 +429,7 @@ async function chamarGroqLlama(prompt, chave) {
 }
 
 app.post('/redigir-peca', express.json(), async (req, res) => {
+    req.setTimeout(0); 
     try {
         const { modelo, estrategia, relatorio } = req.body;
         const chaves = getKeys();
