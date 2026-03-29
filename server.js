@@ -8,6 +8,7 @@ const { exec } = require('child_process');
 const axios = require('axios');
 const FormData = require('form-data');
 const AdmZip = require('adm-zip');
+const ffmpegPath = require('ffmpeg-static');
 
 const app = express();
 app.use(cors());
@@ -78,29 +79,36 @@ const IGNORAR_LIXO = [
     "mandado", "dilação de prazo", "ofício", "oficio", "outros documentos", "termo"
 ];
 
-// Função compartilhada de extração com FILTROS DINÂMICOS (Front + Back)
+// NOVO: Função para remover acentos, hifens e padronizar tudo em minúsculo
+function normalizar(texto) {
+    if (!texto) return "";
+    return texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[-_]/g, '').toLowerCase();
+}
+
+// Função de extração de texto com FILTROS DINÂMICOS INTELIGENTES
 async function extrairTextoFiltrado(fileBuffer, originalName, customManter = "", customIgnorar = "") {
     let textoConsolidado = "";
     const aceitos = [];
     const removidos = [];
 
-    // Mescla as regras fixas do servidor com as regras digitadas por você na tela
-    const extraManter = customManter.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-    const extraIgnorar = customIgnorar.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    // Normaliza as palavras digitadas por você na interface
+    const extraManter = (customManter || "").split(',').map(s => normalizar(s.trim())).filter(Boolean);
+    const extraIgnorar = (customIgnorar || "").split(',').map(s => normalizar(s.trim())).filter(Boolean);
     
-    const regrasManter = [...MANTER_PRIORIDADE, ...extraManter];
-    const regrasIgnorar = [...IGNORAR_LIXO, ...extraIgnorar];
+    // Une com as listas do servidor e normaliza tudo
+    const regrasManter = MANTER_PRIORIDADE.map(normalizar).concat(extraManter);
+    const regrasIgnorar = IGNORAR_LIXO.map(normalizar).concat(extraIgnorar);
 
     if (originalName.toLowerCase().endsWith('.zip')) {
         const zip = new AdmZip(fileBuffer);
         for (const entry of zip.getEntries()) {
             if (!entry.isDirectory && entry.name.toLowerCase().endsWith('.pdf')) {
                 
-                const nomeArquivo = entry.name.toLowerCase(); 
+                // Normaliza o nome do arquivo do e-SAJ (ex: "E-mail (pag 209).pdf" vira "email (pag 209).pdf")
+                const nomeArquivoNormalizado = normalizar(entry.name); 
                 
-                // Usa as novas listas mescladas para tomar a decisão
-                const ehLixo = regrasIgnorar.some(p => nomeArquivo.includes(p));
-                const blindado = regrasManter.some(p => nomeArquivo.includes(p));
+                const ehLixo = regrasIgnorar.some(p => nomeArquivoNormalizado.includes(p));
+                const blindado = regrasManter.some(p => nomeArquivoNormalizado.includes(p));
                 
                 if (ehLixo && !blindado) {
                     removidos.push(entry.name);
@@ -140,7 +148,7 @@ CAMPOS A EXTRAIR:
 {
   "campoA_denuncia": "Acusados, data do crime, vítimas, artigos imputados e testemunhas da acusação.",
   "campoB_bo": "Data/hora do registro, data/hora do fato e tempo decorrido.",
-  "campoC_depoimentos": "Resumo objective e trechos-chave de vítimas e testemunhas.",
+  "campoC_depoimentos": "Resumo objetivo e trechos-chave de vítimas e testemunhas.",
   "campoD_laudos": "Conclusões de laudos periciais e certidões.",
   "campoE_delegado": "Resumo do relatório policial focando em verbos de ação e provas.",
   "campoF_incidentes": "Data do recebimento da denúncia, resposta à acusação e alegações finais.",
@@ -151,23 +159,23 @@ CAMPOS A EXTRAIR:
 
     let logErros = [];
 
-    // 1. TENTATIVA 1: GEMINI 1.5 PRO (Caminhão de Carga: Suporta 2 Milhões de Tokens)
+    // TENTATIVA 1: GEMINI 1.5 PRO
     if (chaves.gemini) {
         try {
-            const promptCompleto = promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto;
             const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key=${chaves.gemini}`, {
-                contents: [{ parts: [{ text: promptCompleto }] }],
-                generationConfig: { responseMimeType: "application/json" } // Força o Gemini a devolver JSON puro
+                contents: [{ parts: [{ text: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }] }],
+                generationConfig: { responseMimeType: "application/json" }
             }, { headers: { 'Content-Type': 'application/json' } });
             
             return JSON.parse(res.data.candidates[0].content.parts[0].text);
         } catch (e) {
-            console.error("Erro no motor Gemini:", e.response ? JSON.stringify(e.response.data) : e.message);
-            logErros.push("GEMINI");
+            // Captura o erro real do Google
+            const msgErro = e.response && e.response.data && e.response.data.error ? e.response.data.error.message : e.message;
+            logErros.push(`[GEMINI] Recusou: ${msgErro}`);
         }
     }
 
-    // 2. TENTATIVA 2: CLAUDE 3.5 SONNET (Contexto longo: Suporta 200 mil Tokens)
+    // TENTATIVA 2: CLAUDE 3.5 SONNET
     if (chaves.claude) {
          try {
             const res = await axios.post('https://api.anthropic.com/v1/messages', {
@@ -175,25 +183,23 @@ CAMPOS A EXTRAIR:
                 messages: [{ role: "user", content: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }]
             }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
             
-            // Limpa as marcações Markdown que o Claude costuma adicionar
             let textoResposta = res.data.content[0].text;
             textoResposta = textoResposta.replace(/```json/g, '').replace(/```/g, '').trim();
             return JSON.parse(textoResposta);
         } catch (e) {
-            console.error("Erro no motor Claude:", e.response ? JSON.stringify(e.response.data) : e.message);
-            logErros.push("CLAUDE");
+            const msgErro = e.response && e.response.data && e.response.data.error ? e.response.data.error.message : e.message;
+            logErros.push(`[CLAUDE] Recusou: ${msgErro}`);
         }
     }
 
-    // 3. TENTATIVA 3: GROQ (Ferrari com porta-malas pequeno: Suporta apenas 12 mil Tokens)
+    // TENTATIVA 3: GROQ
     if (chaves.groq) {
          try {
             const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
                 model: "llama-3.3-70b-versatile",
                 messages: [
                     { role: "system", content: promptSistema },
-                    // CORTAMOS O TEXTO EM 35.000 CARACTERES PARA NÃO ESTOURAR O LIMITE DA CONTA GRÁTIS
-                    { role: "user", content: textoBruto.substring(0, 35000) } 
+                    { role: "user", content: textoBruto.substring(0, 25000) } // Limite cortado para caber nos 12k TPM
                 ],
                 response_format: { type: "json_object" },
                 temperature: 0.1
@@ -201,13 +207,13 @@ CAMPOS A EXTRAIR:
             
             return JSON.parse(res.data.choices[0].message.content);
         } catch (e) {
-            console.error("Erro no motor Groq:", e.response ? e.response.data.error.message : e.message);
-            logErros.push("GROQ");
+            const msgErro = e.response && e.response.data && e.response.data.error ? e.response.data.error.message : e.message;
+            logErros.push(`[GROQ] Recusou: ${msgErro}`);
         }
     }
 
-    // Se as 3 IA's falharem (ou se você não tiver salvo as chaves no Cofre)
-    throw new Error(`Falha Crítica. Motores tentados e falhos: ${logErros.length > 0 ? logErros.join(' -> ') : 'NENHUMA CHAVE CADASTRADA'}. Vá na Aba Cofre API e cadastre a chave do Gemini ou Claude.`);
+    // DISPARA O LAUDO DE ERRO NA TELA DO USUÁRIO
+    throw new Error(`As APIs falharam ao processar o texto.\n\nMOTIVOS REAIS:\n${logErros.join('\n')}\n\n-> Vá na Aba 'Cofre API' e verifique se as chaves do Gemini/Claude foram coladas corretamente (sem espaços).`);
 }
 
 // --- ROTA DE EXTRAÇÃO DE TEXTO LIMPO ---
@@ -264,8 +270,15 @@ app.post('/transcrever', uploadAudio.single('audio'), async (req, res) => {
         apagarArquivos(inputPath); return res.status(403).json({ erro: "Chave da AssemblyAI ausente." });
     }
 
-    exec(`ffmpeg -i "${inputPath}" -ar 16000 -ac 1 "${outputPath}"`, async (err) => {
-        if (err) { apagarArquivos(inputPath, outputPath); return res.status(500).json({ erro: "Falha na conversão FFmpeg." }); }
+    // === NOVA CHAMADA BLINDADA DO FFMPEG ===
+    // Usamos aspas duplas no caminho do motor e a flag -y para forçar sobrescrita
+    exec(`"${ffmpegPath}" -y -i "${inputPath}" -ar 16000 -ac 1 "${outputPath}"`, async (err) => {
+        if (err) { 
+            console.error("Erro FFmpeg:", err);
+            apagarArquivos(inputPath, outputPath); 
+            // Agora o erro vai mostrar o laudo exato na tela, e não apenas uma mensagem genérica
+            return res.status(500).json({ erro: `Falha na conversão de áudio: ${err.message}` }); 
+        }
         
         try {
             let transcricaoFormatada = [];
