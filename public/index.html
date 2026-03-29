@@ -198,13 +198,43 @@
             const file = document.getElementById('pdfFile').files[0];
             if(!file) return alert("Selecione o PDF ou ZIP.");
             const fd = new FormData(); fd.append('file', file);
+            
             document.getElementById('painel-p1').innerHTML = `<h2 style="text-align:center; text-indent:0; color:#2b5797;">LENDO E EXTRAINDO (LLAMA 3.3 70B)...</h2>`;
+            
             try {
                 const res = await fetch('/analisar', { method:'POST', body:fd });
                 const result = await res.json();
+                
                 if(result.status === "sucesso") {
                     window.dadosRelatorio = result.detalhes;
                     const d = result.detalhes;
+                    
+                    // Constrói a tabela de Raio-X se o ZIP for processado
+                    let logsHTML = "";
+                    if (result.arquivosLidos && result.arquivosLidos.length > 0) {
+                        const aceitosHtml = result.arquivosLidos.map(a => `<li style="color:#1e7e34; text-indent:0;">✅ ${a}</li>`).join('');
+                        const removidosHtml = result.arquivosIgnorados.map(r => `<li style="color:#c0392b; text-indent:0;">❌ ${r}</li>`).join('');
+                        
+                        logsHTML = `
+                        <div style="margin-top: 40px; padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px; border: 1px solid rgba(0,0,0,0.1);">
+                            <h3 style="color:#2b5797; margin-top:0; text-indent:0;">🗂️ RAIO-X DE EXTRAÇÃO DO E-SAJ</h3>
+                            <div style="display:flex; gap: 20px; flex-wrap: wrap;">
+                                <div style="flex:1; min-width: 250px;">
+                                    <strong style="color:#1e7e34; font-family: 'Segoe UI', sans-serif;">PEÇAS LIDAS PELA IA:</strong>
+                                    <ul style="padding-left:0; margin-top:10px; font-size:12px; font-family: monospace; list-style-type: none; max-height: 200px; overflow-y: auto;">
+                                        ${aceitosHtml}
+                                    </ul>
+                                </div>
+                                <div style="flex:1; min-width: 250px;">
+                                    <strong style="color:#c0392b; font-family: 'Segoe UI', sans-serif;">LIXO DESCARTADO:</strong>
+                                    <ul style="padding-left:0; margin-top:10px; font-size:12px; font-family: monospace; list-style-type: none; max-height: 200px; overflow-y: auto;">
+                                        ${removidosHtml || '<li style="color:#888; text-indent:0;">Nenhum arquivo descartado.</li>'}
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>`;
+                    }
+
                     document.getElementById('painel-p1').innerHTML = `
                         <h2 style="text-align:center; text-indent:0;">DOS FATOS</h2><p>${d.relatorioFatos}</p>
                         <div class="secao-auditoria">
@@ -216,9 +246,15 @@
                             <h3>[F] INCIDENTES PROCESSUAIS</h3><p>${d.campoF_incidentes}</p>
                             <h3>[G] CRONOMETRIA</h3><p>${d.campoG_cronometria}</p>
                             <h3>[H] SENTENÇA E FASE ATUAL</h3><p>${d.campoH_sentenca}</p>
-                        </div>`;
-                } else { alert(result.erro); document.getElementById('painel-p1').innerHTML = `<h2 style="color:red; text-indent:0;">Erro: ${result.erro}</h2>`; }
-            } catch(e) { document.getElementById('painel-p1').innerHTML = "<h2>Falha de comunicação.</h2>"; }
+                        </div>
+                        ${logsHTML}`;
+                } else { 
+                    alert(result.erro); 
+                    document.getElementById('painel-p1').innerHTML = `<h2 style="color:red; text-indent:0;">Erro: ${result.erro}</h2>`; 
+                }
+            } catch(e) { 
+                document.getElementById('painel-p1').innerHTML = "<h2>Falha de comunicação. A requisição pode ter expirado.</h2>"; 
+            }
         }
 
         // === ABA 2: TRANSCRIÇÃO INTEGRAL ===
