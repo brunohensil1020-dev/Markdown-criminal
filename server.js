@@ -24,11 +24,35 @@ const uploadPDF = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
 const uploadAudio = multer({ dest: UPLOADS_DIR, limits: { fileSize: 1000 * 1024 * 1024 } });
 const SECRETS_PATH = path.join(SECRETS_DIR, 'keys.json');
 
+// ============================================================
+// COFRE NEURAL: SALVAMENTO SEGURO E STATUS
+// ============================================================
 app.post('/save-keys', express.json(), (req, res) => {
     const chavesAtuais = getKeys() || {};
-    const chavesAtualizadas = { ...chavesAtuais, ...req.body };
-    fs.writeFileSync(SECRETS_PATH, JSON.stringify(chavesAtualizadas));
+    const novasChaves = req.body;
+    
+    // CORREÇÃO: Só atualiza a chave no cofre se o usuário realmente digitou algo.
+    // Isso impede que um campo vazio apague a chave que já estava salva.
+    Object.keys(novasChaves).forEach(key => {
+        if (novasChaves[key] && novasChaves[key].trim() !== '') {
+            chavesAtuais[key] = novasChaves[key].trim();
+        }
+    });
+    
+    fs.writeFileSync(SECRETS_PATH, JSON.stringify(chavesAtuais));
     res.json({ status: "sucesso", msg: "Cofre Neural atualizado com segurança." });
+});
+
+// NOVA ROTA: Diz ao Front-end se as chaves existem (sem mostrar a chave real)
+app.get('/status-cofre', (req, res) => {
+    const chaves = getKeys() || {};
+    res.json({
+        groq: !!chaves.groq,
+        assembly: !!chaves.assembly,
+        claude: !!chaves.claude,
+        gemini: !!chaves.gemini,
+        escavador: !!chaves.escavador
+    });
 });
 const getKeys = () => fs.existsSync(SECRETS_PATH) ? JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8')) : null;
 
