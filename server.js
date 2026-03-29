@@ -135,26 +135,40 @@ async function extrairTextoFiltrado(fileBuffer, originalName, customManter = "",
 // MOTOR DE LEITURA DE PDF (FALLBACK: GEMINI -> CLAUDE -> GROQ)
 // ============================================================
 async function lerPDFcomIA(textoBruto, chaves) {
-    const promptSistema = `Você é um Analista Jurídico Sênior especializado em auditoria de processos criminais. 
-Sua função é ler o texto do processo e extrair os dados EXATAMENTE no formato JSON solicitado.
+    const promptSistema = `Você é um Analista Jurídico Sênior especializado em auditoria de processos criminais digitais do e-SAJ e PJe.
+Sua função é analisar autos criminais em PDF e produzir um relatório técnico, objetivo, imparcial e estritamente fiel ao conteúdo efetivamente localizado.
 
 REGRAS ABSOLUTAS:
-1. Nunca invente dados.
-2. Se não achar, o valor DEVE ser: "não localizado no PDF analisado".
-3. Anonimize nomes de partes (Primeiro nome + Iniciais). Ex: João da Silva -> João S.
-4. Retorne ÚNICO e EXCLUSIVAMENTE um objeto JSON válido, sem comentários.
+1. Nunca invente dados ou complete lacunas por inferência. Nunca trate alegação da acusação como fato comprovado.
+2. Se um dado não for localizado, escreva exatamente: "não localizado no PDF analisado".
+3. Toda afirmação relevante deve indicar a página correspondente no padrão [PÁGINA X] ou [PÁGINAS X-Y].
+4. Anonimize nomes de partes, vítimas e testemunhas (Primeiro nome + Iniciais).
+5. Ignore ruídos documentais (cabeçalhos, rodapés, metadados), exceto para localizar a assinatura digital do magistrado. Se a data vier da assinatura, avise: "data extraída da assinatura digital do magistrado".
+6. Registre divergências entre peças de modo neutro.
+7. Retorne ÚNICO E EXCLUSIVAMENTE UM OBJETO JSON VÁLIDO.
+8. Use quebras de linha (\n) para estruturar os tópicos no JSON.
 
-CAMPOS A EXTRAIR:
+FORMATO EXATO DE SAÍDA ESPERADA:
 {
-  "campoA_denuncia": "Acusados, data do crime, vítimas, artigos imputados e testemunhas da acusação.",
-  "campoB_bo": "Data/hora do registro, data/hora do fato e tempo decorrido.",
-  "campoC_depoimentos": "Resumo objetivo e trechos-chave de vítimas e testemunhas.",
-  "campoD_laudos": "Conclusões de laudos periciais e certidões.",
-  "campoE_delegado": "Resumo do relatório policial focando em verbos de ação e provas.",
-  "campoF_incidentes": "Data do recebimento da denúncia, resposta à acusação e alegações finais.",
-  "campoG_cronometria": "Tempo decorrido desde o recebimento da denúncia.",
-  "campoH_sentenca": "Resultado, artigos, pena, regime e último despacho (se houver).",
-  "relatorioFatos": "Crie um texto contínuo chamado DOS FATOS resumindo o caso de forma imparcial."
+  "campoA_denuncia": "Acusados: [Nome] (Idade na data do fato: [X]).\nVítimas: [Nome].\nData do crime: [Data e hora].\nArtigos imputados: [Artigos].\nPenas em abstrato: [Pena mínima e máxima com indicação da lei vigente à data do fato].\nNarrativa fática verbatim: \"[Trecho literal]\". [PÁGINA X]\nTestemunhas: [Nome, qualidade e função].",
+  
+  "campoB_bo": "Data/hora do registro: [Data/hora].\nData/hora do fato: [Data/hora].\nTempo decorrido: [Cálculo].\nLesões registradas no BO: [Local lesionado + tipo/resultado]. [PÁGINA X]\nHistórico verbatim integral: \"[Transcrição literal da última página do BO]\".",
+  
+  "campoC_depoimentos": "C.1. [Nome] — [Qualidade] [PÁGINA X]\nResumo objetivo: [Resumo neutro].\nTrecho-chave verbatim: \"[Trecho literal]\".\n[Repetir para todos os ouvidos]",
+  
+  "campoD_laudos": "D.1. Laudo [manuscrito/rascunho OU digitado/definitivo] [PÁGINAS X-Y]\nLegibilidade: [Informar se há OCR ilegível].\nDescrição da lesão: [Tipo, localização, dimensão].\nRespostas aos quesitos oficiais: [Lista].\nConclusão: [Grau da lesão e instrumento].\n\nD.2. Pessoas não localizadas/intimadas: [Motivos].",
+  
+  "campoE_delegado": "Delegado(a): [Nome].\nResumo verbatim: \"[Trecho literal]\". [PÁGINA X]\nVerbos de ação e provas documentadas: [Lista].",
+  
+  "campoF_incidentes": "Recebimento da denúncia: [Data da assinatura digital e juiz]. [PÁGINA X]\nCitação do réu: [Tentativas frustradas com motivos e citação positiva].\nResposta à acusação: [Data e tese].\nAudiências: [Participantes e cisões].",
+  
+  "campoG_cronometria": "Data do fato: [Data]\nRegistro BO: [Data]\nFlagrante: [Data]\nOferecimento da denúncia: [Data]\nRecebimento da denúncia: [Data]\nAudiências: [Datas]\nAlegações finais: [Datas]\nTempo desde o recebimento até hoje: [Cálculo]\nTempo total desde o fato: [Cálculo]",
+  
+  "pontosChave": "I. Divergências identificadas: [Relatar contradições entre fases, horários e depoimentos com páginas].\nII. Lacunas probatórias: [Testemunhas não ouvidas, laudos ausentes e motivos].\nIII. Marcos cronológicos críticos: [Prazos relevantes e inércia > 90 dias].\nIV. Observações de instrução: [Mudanças de versão, cisões atípicas].",
+  
+  "campoH_sentenca": "Último despacho ou Sentença: [Resultado, pena, regime e provas citadas]. [PÁGINA X]\nPeça defensiva pendente: [Qual a próxima manifestação devida].",
+  
+  "relatorioFatos": "DOS FATOS\nTrata-se de ação penal em que o Ministério Público imputou ao(s) denunciado(s) a prática, em tese, das infrações penais previstas no(s) art.(s) [X], conforme denúncia de [PÁGINAS X-Y]. A pena em abstrato, na redação vigente à data do fato ([Lei]), é de [Mínima] a [Máxima].\nConsta na denúncia que, em [Data], na cidade de [Cidade/UF], no local [Local], o acusado, em tese, teria praticado [Verbos nucleares], em desfavor de [Vítima], conforme narrativa acusatória de [PÁGINAS X-Y].\nA denúncia foi recebida em [Data], extraída da assinatura digital em [PÁGINA X].\nNa fase de instrução, foram efetivamente ouvidas as testemunhas [Nomes] [PÁGINAS X-Y]. [Registrar testemunhas não ouvidas]. O acusado [foi interrogado em PÁGINA X / teve a revelia decretada].\nAo final da instrução, o Ministério Público apresentou alegações finais postulando [Pedido], conforme [PÁGINAS X-Y].\nA defesa apresentou alegações finais postulando [Pedido ou não localizado].\nÉ o breve relato dos fatos."
 }`;
 
     let logErros = [];
@@ -269,6 +283,14 @@ app.post('/transcrever', uploadAudio.single('audio'), async (req, res) => {
     if (model.includes('universal') && (!chaves || !chaves.assembly)) {
         apagarArquivos(inputPath); return res.status(403).json({ erro: "Chave da AssemblyAI ausente." });
     }
+
+    // === SOLUÇÃO CRÍTICA: FORÇAR PERMISSÃO DE EXECUÇÃO NO LINUX ===
+    try {
+        fs.chmodSync(ffmpegPath, 0o755); // O código 0755 dá permissão de execução (rwxr-xr-x)
+    } catch (chmodErr) {
+        console.error("Aviso: Não foi possível alterar a permissão do FFmpeg via Node:", chmodErr);
+    }
+    // ===============================================================
 
     // === NOVA CHAMADA BLINDADA DO FFMPEG ===
     // Usamos aspas duplas no caminho do motor e a flag -y para forçar sobrescrita
