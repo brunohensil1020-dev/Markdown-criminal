@@ -63,19 +63,22 @@ async function extrairTextoFiltrado(fileBuffer, originalName) {
     if (originalName.toLowerCase().endsWith('.zip')) {
         const zip = new AdmZip(fileBuffer);
         for (const entry of zip.getEntries()) {
-            if (!entry.isDirectory && entry.entryName.toLowerCase().endsWith('.pdf')) {
-                const nome = entry.entryName.toLowerCase();
-                const ehLixo = IGNORAR_LIXO.some(p => nome.includes(p));
-                const blindado = MANTER_PRIORIDADE.some(p => nome.includes(p));
+            if (!entry.isDirectory && entry.name.toLowerCase().endsWith('.pdf')) {
+                
+                // CORREÇÃO CRÍTICA: Usa 'entry.name' (apenas o arquivo) e não o caminho da pasta
+                const nomeArquivo = entry.name.toLowerCase(); 
+                const ehLixo = IGNORAR_LIXO.some(p => nomeArquivo.includes(p));
+                const blindado = MANTER_PRIORIDADE.some(p => nomeArquivo.includes(p));
+                
                 if (ehLixo && !blindado) {
-                    removidos.push(entry.entryName);
+                    removidos.push(entry.name);
                     continue;
                 }
                 try {
                     const pdfData = await pdf(entry.getData());
-                    textoConsolidado += `\n\n=== PEÇA PROCESSUAL: ${entry.entryName} ===\n${pdfData.text}`;
-                    aceitos.push(entry.entryName);
-                } catch (err) { removidos.push(`${entry.entryName} (erro leitura)`); }
+                    textoConsolidado += `\n\n=== PEÇA PROCESSUAL: ${entry.name} ===\n${pdfData.text}`;
+                    aceitos.push(entry.name);
+                } catch (err) { removidos.push(`${entry.name} (erro leitura)`); }
             }
         }
     } else if (originalName.toLowerCase().endsWith('.pdf')) {
@@ -164,11 +167,13 @@ app.post('/analisar', uploadPDF.single('file'), async (req, res) => {
         const chaves = getKeys();
         if (!chaves || !chaves.groq) return res.status(403).json({ erro: "Chave da Groq ausente." });
 
-        const { textoConsolidado } = await extrairTextoFiltrado(req.file.buffer, req.file.originalname);
+        const { textoConsolidado, aceitos, removidos } = await extrairTextoFiltrado(req.file.buffer, req.file.originalname);
         if (!textoConsolidado) return res.status(400).json({ erro: "Todos os PDFs foram filtrados como irrelevantes." });
 
         const detalhes = await lerPDFcomIA(textoConsolidado.replace(/\s+/g, ' '), chaves.groq);
-        res.json({ status: "sucesso", detalhes });
+        
+        // CORREÇÃO: Enviando as listas 'aceitos' e 'removidos' para o painel Neural
+        res.json({ status: "sucesso", detalhes, arquivosLidos: aceitos, arquivosIgnorados: removidos });
     } catch (e) {
         res.status(500).json({ erro: e.message });
     }
