@@ -355,16 +355,18 @@
                     }
 
                     document.getElementById('painel-p1').innerHTML = `
-                        <h2 style="text-align:center; text-indent:0;">DOS FATOS</h2><p>${d.relatorioFatos}</p>
+                        <h2 style="text-align:center; text-indent:0;">DOS FATOS</h2>
+                        <p style="text-indent:0; text-align:justify;">${formatarParagrafo(d.relatorioFatos)}</p>
                         <div class="secao-auditoria">
-                            <h3>[A] DENÚNCIA</h3><p>${d.campoA_denuncia}</p>
-                            <h3>[B] BOLETIM DE OCORRÊNCIA</h3><p>${d.campoB_bo}</p>
-                            <h3>[C] DEPOIMENTOS</h3><p>${d.campoC_depoimentos}</p>
-                            <h3>[D] LAUDOS E CERTIDÕES</h3><p>${d.campoD_laudos}</p>
-                            <h3>[E] RELATÓRIO DO DELEGADO</h3><p>${d.campoE_delegado}</p>
-                            <h3>[F] INCIDENTES PROCESSUAIS</h3><p>${d.campoF_incidentes}</p>
-                            <h3>[G] CRONOMETRIA</h3><p>${d.campoG_cronometria}</p>
-                            <h3>[H] SENTENÇA E FASE ATUAL</h3><p>${d.campoH_sentenca}</p>
+                            <h3>[A] DENÚNCIA</h3><p style="text-indent:0;">${formatarParagrafo(d.campoA_denuncia)}</p>
+                            <h3>[B] BOLETIM DE OCORRÊNCIA</h3><p style="text-indent:0;">${formatarParagrafo(d.campoB_bo)}</p>
+                            <h3>[C] DEPOIMENTOS E INTERROGATÓRIOS</h3><p style="text-indent:0;">${formatarParagrafo(d.campoC_depoimentos)}</p>
+                            <h3>[D] LAUDOS E CERTIDÕES</h3><p style="text-indent:0;">${formatarParagrafo(d.campoD_laudos)}</p>
+                            <h3>[E] RELATÓRIO DO DELEGADO</h3><p style="text-indent:0;">${formatarParagrafo(d.campoE_delegado)}</p>
+                            <h3>[F] INCIDENTES PROCESSUAIS</h3><p style="text-indent:0;">${formatarParagrafo(d.campoF_incidentes)}</p>
+                            <h3>[G] CRONOMETRIA</h3><p style="text-indent:0;">${formatarParagrafo(d.campoG_cronometria)}</p>
+                            <h3 style="color:#e74c3c;">[H] PONTOS-CHAVE EXTRAÍDOS (DIVERGÊNCIAS E LACUNAS)</h3><p style="text-indent:0;">${formatarParagrafo(d.pontosChave)}</p>
+                            <h3>[I] SENTENÇA E FASE ATUAL</h3><p style="text-indent:0;">${formatarParagrafo(d.campoH_sentenca)}</p>
                         </div>
                         ${logsHTML}`;
                 } else { 
@@ -445,8 +447,55 @@
             if(!window.dadosRelatorio) return alert("Extraia os dados primeiro.");
             const { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } = docx;
             const d = window.dadosRelatorio;
-            const sec = (t, c) => [new Paragraph({text:t, heading:HeadingLevel.HEADING_3, spacing:{before:200}}), new Paragraph({text:c, alignment:AlignmentType.JUSTIFIED, spacing:{after:200}})];
-            const doc = new Document({ sections:[{ children:[ new Paragraph({children:[new TextRun({text:"RELATÓRIO DE AUDITORIA CRIMINAL",bold:true,size:28})],spacing:{after:400},alignment:AlignmentType.CENTER}), new Paragraph({text:"DOS FATOS",heading:HeadingLevel.HEADING_2}), new Paragraph({text:d.relatorioFatos,alignment:AlignmentType.JUSTIFIED,spacing:{after:400}}), ...sec("[A] DENÚNCIA",d.campoA_denuncia), ...sec("[B] BO",d.campoB_bo), ...sec("[C] DEPOIMENTOS",d.campoC_depoimentos), ...sec("[D] LAUDOS",d.campoD_laudos), ...sec("[E] DELEGADO",d.campoE_delegado), ...sec("[F] INCIDENTES",d.campoF_incidentes), ...sec("[G] CRONOMETRIA",d.campoG_cronometria), ...sec("[H] SENTENÇA",d.campoH_sentenca) ]}]});
+
+            // NOVO: Função inteligente que preserva as quebras de linha (\n) e os negritos no Word
+            const criarParagrafosFormatados = (texto) => {
+                if (!texto) return [new Paragraph({text: "Não localizado.", alignment: AlignmentType.JUSTIFIED})];
+                
+                // Quebra o texto onde tem \n e cria um parágrafo novo no Word para cada linha
+                return (texto || "").split('\n').filter(l => l.trim()).map(linha => {
+                    const partes = linha.split(/(\*\*.*?\*\*)/g); // Detecta os negritos em Markdown
+                    const textRuns = partes.map(parte => {
+                        if (parte.startsWith('**') && parte.endsWith('**')) {
+                            return new TextRun({ text: parte.slice(2, -2), bold: true });
+                        }
+                        return new TextRun({ text: parte });
+                    });
+                    return new Paragraph({ children: textRuns, alignment: AlignmentType.JUSTIFIED, spacing: { after: 150 } });
+                });
+            };
+
+            // Criador de seções coloridas para o Word
+            const sec = (titulo, conteudo, cor="2B5797") => [
+                new Paragraph({
+                    children:[new TextRun({text:titulo, color:cor, bold:true})], 
+                    heading:HeadingLevel.HEADING_3, 
+                    spacing:{before:300, after:100}
+                }),
+                ...criarParagrafosFormatados(conteudo)
+            ];
+
+            // Montagem do Documento com os PONTOS CHAVE inclusos
+            const doc = new Document({ sections:[{ children:[ 
+                new Paragraph({children:[new TextRun({text:"RELATÓRIO DE AUDITORIA CRIMINAL",bold:true,size:28})],spacing:{after:400},alignment:AlignmentType.CENTER}), 
+                
+                new Paragraph({text:"DOS FATOS",heading:HeadingLevel.HEADING_2, spacing:{before:300, after:100}}), 
+                ...criarParagrafosFormatados(d.relatorioFatos), 
+                
+                ...sec("[A] DENÚNCIA", d.campoA_denuncia), 
+                ...sec("[B] BOLETIM DE OCORRÊNCIA", d.campoB_bo), 
+                ...sec("[C] DEPOIMENTOS E INTERROGATÓRIOS", d.campoC_depoimentos), 
+                ...sec("[D] LAUDOS E CERTIDÕES", d.campoD_laudos), 
+                ...sec("[E] RELATÓRIO DO DELEGADO", d.campoE_delegado), 
+                ...sec("[F] INCIDENTES PROCESSUAIS", d.campoF_incidentes), 
+                ...sec("[G] CRONOMETRIA", d.campoG_cronometria), 
+                
+                // A NOVA SEÇÃO EM VERMELHO NO SEU WORD
+                ...sec("[H] PONTOS-CHAVE EXTRAÍDOS (DIVERGÊNCIAS E LACUNAS)", d.pontosChave, "E74C3C"), 
+                
+                ...sec("[I] SENTENÇA E FASE ATUAL", d.campoH_sentenca) 
+            ]}]});
+            
             saveAs(await Packer.toBlob(doc), `Auditoria_Inteligente.docx`);
         }
 
