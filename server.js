@@ -134,8 +134,17 @@ Retorne o JSON com as seguintes chaves exatas:
 
         return JSON.parse(response.data.choices[0].message.content);
     } catch (e) {
-        console.error("Erro na API da Groq:", e.response ? e.response.data : e.message);
-        throw new Error("Falha na Leitura por IA. Verifique o tamanho do PDF ou a chave API.");
+        // Captura o motivo EXATO da recusa da API
+        let motivoExato = "Erro desconhecido";
+        if (e.response && e.response.data && e.response.data.error) {
+            motivoExato = e.response.data.error.message;
+        } else if (e.message) {
+            motivoExato = e.message;
+        }
+        
+        console.error("Erro CRÍTICO na Groq:", motivoExato);
+        // Joga a verdade nua e crua para a tela do usuário
+        throw new Error(`Recusa da IA (Groq): ${motivoExato}`);
     }
 }
 
