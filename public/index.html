@@ -246,6 +246,7 @@
                                         <div style="flex:1;"><strong style="color:#c0392b; font-family: 'Segoe UI', sans-serif;">LIXO DESCARTADO (${result.totalRemovidos}):</strong><ul style="list-style:none; padding:0; max-height:200px; overflow-y:auto; margin-top:10px;">${removidosHtml}</ul></div>
                                       </div>`;
 
+                    document.getElementById('painel-p1').style.display = 'block';
                     document.getElementById('painel-p1').innerHTML = `
                         <h2 style="text-align:center;">RESUMO DA EXTRAÇÃO</h2>
                         ${logsHTML}
@@ -290,6 +291,7 @@
                         </div>`;
                     }
                     
+                    document.getElementById('painel-p1').style.display = 'block';
                     document.getElementById('painel-p1').innerHTML = `
                         <h2 style="text-align:center;">DOS FATOS</h2>${alertaBackup}
                         <p style="text-align:justify;">${formatarParagrafo(d.relatorioFatos)}</p>
@@ -339,6 +341,7 @@
                         } else { htmlFinal += `<p style="color:red;">Erro: ${r.erro}</p>`; }
                         htmlFinal += `<br><br>`;
                     });
+                    document.getElementById('painel-p2').style.display = 'block';
                     document.getElementById('painel-p2').innerHTML = htmlFinal;
                 } else { document.getElementById('painel-p2').innerHTML = `<h2>${result.erro}</h2>`; }
             } catch(e) { document.getElementById('painel-p2').innerHTML = "<h2>Tempo excedido.</h2>"; }
@@ -359,6 +362,7 @@
                 const result = await res.json();
                 if(result.status === "sucesso") {
                     window.dadosEstrategia = result.dados; const d = result.dados;
+                    document.getElementById('painel-p3').style.display = 'block';
                     document.getElementById('painel-p3').innerHTML = `<h2 style="text-align:center;">MAPA ESTRATÉGICO</h2><div class="secao-auditoria"><h3>PEÇA CABÍVEL</h3><p>${d.pecaCabivel}</p><h3>VERBOS NUCLEARES</h3><p>${d.resumoVerbos}</p><h3>CONTRADIÇÕES</h3><p>${d.contradicoes}</p><h3>TESES</h3><p>${d.tesesDefesa}</p></div>`;
                 } else { alert(result.erro); }
             } catch(e) { document.getElementById('painel-p3').innerHTML = "<h2>Falha.</h2>"; }
@@ -375,6 +379,7 @@
                     window.pecaGerada = result.peca;
                     const alerta = result.aviso ? `<div style="background:rgba(231,76,60,0.2); color:#e74c3c; padding:10px; text-align:center;">⚠️ ${result.aviso}</div>` : '';
                     const htmlPeca = result.peca.split('\n').filter(p=>p.trim()).map(p=>`<p>${p}</p>`).join('');
+                    document.getElementById('painel-p3').style.display = 'block';
                     document.getElementById('painel-p3').innerHTML = `<h2 style="text-align:center;">PEÇA FINALIZADA</h2>${alerta}<div>${htmlPeca}</div>`;
                 } else { alert(result.erro); }
             } catch(e) { alert("Erro de conexão."); }
