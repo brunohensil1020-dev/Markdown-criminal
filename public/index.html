@@ -229,86 +229,235 @@
 
         // === ABA 1: PDF ===
         window.dadosRelatorio = null;
+
+        function escapeHtmlSeguro(texto) {
+            return String(texto || "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function montarBlocoBOPrioritario(bo) {
+            if (!bo || !bo.encontrado) return "";
+
+            const dataRegistro = escapeHtmlSeguro(bo.dataRegistro || "não localizado");
+            const dataFato = escapeHtmlSeguro(bo.dataFato || "não localizado");
+            const tempoDecorrido = escapeHtmlSeguro(bo.tempoDecorrido || "não localizado");
+            const origem = escapeHtmlSeguro(bo.origem || "não identificada");
+
+            return `
+                <div style="
+                    margin-top:20px;
+                    padding:18px;
+                    background:rgba(30,126,52,0.08);
+                    border:1px solid rgba(30,126,52,0.35);
+                    border-left:6px solid #1e7e34;
+                    border-radius:10px;
+                    box-shadow:0 4px 14px rgba(0,0,0,0.08);
+                ">
+                    <h3 style="
+                        margin:0 0 12px 0;
+                        color:#1e7e34;
+                        text-indent:0;
+                        font-family:'Segoe UI', sans-serif;
+                        font-size:15px;
+                        letter-spacing:0.4px;
+                    ">🧾 BO PRIORITÁRIO EXTRAÍDO AUTOMATICAMENTE</h3>
+
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-bottom:14px;">
+                        <div style="background:rgba(255,255,255,0.35); padding:12px; border-radius:8px;">
+                            <div style="font-size:11px; color:#555; font-family:'Segoe UI', sans-serif;">DATA/HORA DO REGISTRO</div>
+                            <div style="font-size:15px; color:#111; font-weight:700; margin-top:4px;">${dataRegistro}</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.35); padding:12px; border-radius:8px;">
+                            <div style="font-size:11px; color:#555; font-family:'Segoe UI', sans-serif;">DATA/HORA DO FATO</div>
+                            <div style="font-size:15px; color:#111; font-weight:700; margin-top:4px;">${dataFato}</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.35); padding:12px; border-radius:8px;">
+                            <div style="font-size:11px; color:#555; font-family:'Segoe UI', sans-serif;">TEMPO DECORRIDO</div>
+                            <div style="font-size:15px; color:#111; font-weight:700; margin-top:4px;">${tempoDecorrido}</div>
+                        </div>
+                    </div>
+
+                    <div style="
+                        background:rgba(0,0,0,0.05);
+                        border:1px dashed rgba(0,0,0,0.15);
+                        border-radius:8px;
+                        padding:12px;
+                        font-size:12px;
+                        color:#444;
+                        text-indent:0;
+                        font-family:monospace;
+                        word-break:break-word;
+                    ">
+                        <strong style="color:#222;">Origem da extração:</strong> ${origem}
+                    </div>
+                </div>
+            `;
+        }
+
+        function montarLogsExtracao(result) {
+            const aceitosHtml = (result.aceitos || result.arquivosLidos || [])
+                .map(a => `<li style="color:#1e7e34; text-indent:0; font-size:12px; font-family:monospace;">✅ ${escapeHtmlSeguro(a)}</li>`)
+                .join('');
+
+            const removidosHtml = (result.removidos || result.arquivosIgnorados || [])
+                .map(r => `<li style="color:#c0392b; text-indent:0; font-size:12px; font-family:monospace;">❌ ${escapeHtmlSeguro(r)}</li>`)
+                .join('');
+
+            return `
+                <div style="
+                    margin-top:20px;
+                    padding:20px;
+                    background:rgba(0,0,0,0.05);
+                    border-radius:8px;
+                    border:1px solid rgba(0,0,0,0.1);
+                ">
+                    <h3 style="color:#2b5797; margin-top:0; text-indent:0; font-family:'Segoe UI', sans-serif;">🗂️ RAIO-X DE EXTRAÇÃO DO E-SAJ</h3>
+                    <div style="display:flex; gap:20px; flex-wrap:wrap;">
+                        <div style="flex:1; min-width:250px;">
+                            <strong style="color:#1e7e34; font-family:'Segoe UI', sans-serif;">PEÇAS LIDAS:</strong>
+                            <ul style="list-style:none; padding:0; max-height:200px; overflow-y:auto; margin-top:10px;">
+                                ${aceitosHtml || '<li style="color:#888; text-indent:0; font-size:12px;">Nenhuma peça listada.</li>'}
+                            </ul>
+                        </div>
+                        <div style="flex:1; min-width:250px;">
+                            <strong style="color:#c0392b; font-family:'Segoe UI', sans-serif;">LIXO DESCARTADO:</strong>
+                            <ul style="list-style:none; padding:0; max-height:200px; overflow-y:auto; margin-top:10px;">
+                                ${removidosHtml || '<li style="color:#888; text-indent:0; font-size:12px;">Nenhum arquivo descartado.</li>'}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function formatarParagrafoRelatorio(texto) {
+            return escapeHtmlSeguro(texto || "").replace(/\n/g, "<br>");
+        }
+
         async function extrairTextoLimpo() {
-            const file = document.getElementById('pdfFile').files[0]; if(!file) return alert("Anexe o PDF/ZIP.");
-            const fd = new FormData(); fd.append('file', file);
-            const { customManter, customIgnorar } = prepararFiltros(); fd.append('customManter', customManter); fd.append('customIgnorar', customIgnorar);
-            document.getElementById('painel-p1').innerHTML = `<h2 style="text-align:center; color:#2b5797;">EXTRAINDO...</h2>`;
+            const file = document.getElementById('pdfFile').files[0];
+            if (!file) return alert("Anexe o PDF/ZIP.");
+
+            const fd = new FormData();
+            fd.append('file', file);
+
+            const { customManter, customIgnorar } = prepararFiltros();
+            fd.append('customManter', customManter);
+            fd.append('customIgnorar', customIgnorar);
+
+            document.getElementById('painel-p1').innerHTML = `
+                <h2 style="text-align:center; color:#2b5797;">EXTRAINDO...</h2>
+                <p style="text-indent:0; text-align:center; color:#555;">Lendo peças e procurando campos críticos do BO.</p>
+            `;
+
             try {
-                const res = await fetch('/extrair-texto', { method:'POST', body:fd }); const result = await res.json();
-                if(result.status === "sucesso") {
-                    
-                    // Constrói o Raio-X Visual para a Extração Limpa
-                    const aceitosHtml = (result.aceitos || []).map(a => `<li style="color:#1e7e34; text-indent:0; font-size:12px; font-family:monospace;">✅ ${a}</li>`).join('');
-                    const removidosHtml = (result.removidos || []).map(r => `<li style="color:#c0392b; text-indent:0; font-size:12px; font-family:monospace;">❌ ${r}</li>`).join('');
-                    const logsHTML = `<div style="display:flex; gap: 20px; text-align:left; margin-top:20px; padding:15px; background:rgba(0,0,0,0.05); border-radius:8px; border: 1px solid rgba(0,0,0,0.1);">
-                                        <div style="flex:1;"><strong style="color:#1e7e34; font-family: 'Segoe UI', sans-serif;">PEÇAS LIDAS (${result.totalAceitos}):</strong><ul style="list-style:none; padding:0; max-height:200px; overflow-y:auto; margin-top:10px;">${aceitosHtml}</ul></div>
-                                        <div style="flex:1;"><strong style="color:#c0392b; font-family: 'Segoe UI', sans-serif;">LIXO DESCARTADO (${result.totalRemovidos}):</strong><ul style="list-style:none; padding:0; max-height:200px; overflow-y:auto; margin-top:10px;">${removidosHtml}</ul></div>
-                                      </div>`;
+                const res = await fetch('/extrair-texto', { method: 'POST', body: fd });
+                const result = await res.json();
+
+                if (result.status === "sucesso") {
+                    const blocoBO = montarBlocoBOPrioritario(result.boPrioritario);
+                    const logsHTML = montarLogsExtracao(result);
+                    const previa = escapeHtmlSeguro((result.textoLimpo || "").substring(0, 3000));
 
                     document.getElementById('painel-p1').style.display = 'block';
                     document.getElementById('painel-p1').innerHTML = `
                         <h2 style="text-align:center;">RESUMO DA EXTRAÇÃO</h2>
+                        ${blocoBO}
                         ${logsHTML}
                         <div style="margin-top:30px;">
-                            <h3 style="text-align:center;">PRÉVIA DO TEXTO (Início)</h3>
-                            <p style="white-space:pre-wrap; font-size:12px; text-align:justify; text-indent:0;">${result.textoLimpo.substring(0, 3000)}...</p>
-                        </div>`;
-                } else { document.getElementById('painel-p1').innerHTML = `<h2>Erro: ${result.erro}</h2>`; }
-            } catch(e) { document.getElementById('painel-p1').innerHTML = "<h2>Falha de Conexão.</h2>"; }
+                            <h3 style="text-align:center;">PRÉVIA DO TEXTO (INÍCIO)</h3>
+                            <p style="white-space:pre-wrap; font-size:12px; text-align:justify; text-indent:0;">${previa}...</p>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('painel-p1').innerHTML = `<h2>Erro: ${escapeHtmlSeguro(result.erro)}</h2>`;
+                }
+            } catch (e) {
+                document.getElementById('painel-p1').innerHTML = "<h2>Falha de Conexão.</h2>";
+            }
         }
 
         async function processarPDF() {
-            const file = document.getElementById('pdfFile').files[0]; if(!file) return alert("Anexe PDF/ZIP.");
-            const fd = new FormData(); fd.append('file', file);
-            const { customManter, customIgnorar } = prepararFiltros(); fd.append('customManter', customManter); fd.append('customIgnorar', customIgnorar); fd.append('modelo', document.getElementById('modeloAuditoria').value);
-            document.getElementById('painel-p1').innerHTML = `<h2 style="text-align:center; color:#2b5797;">ANALISANDO (ISSO PODE LEVAR MINUTOS)...</h2>`;
+            const file = document.getElementById('pdfFile').files[0];
+            if (!file) return alert("Anexe PDF/ZIP.");
+
+            const fd = new FormData();
+            fd.append('file', file);
+
+            const { customManter, customIgnorar } = prepararFiltros();
+            fd.append('customManter', customManter);
+            fd.append('customIgnorar', customIgnorar);
+            fd.append('modelo', document.getElementById('modeloAuditoria').value);
+
+            document.getElementById('painel-p1').innerHTML = `
+                <h2 style="text-align:center; color:#2b5797;">ANALISANDO (ISSO PODE LEVAR MINUTOS)...</h2>
+                <p style="text-indent:0; text-align:center; color:#555;">Aplicando extração prioritária do BO + auditoria por IA.</p>
+            `;
+
             try {
-                const res = await fetch('/analisar', { method:'POST', body:fd }); const result = await res.json();
-                if(result.status === "sucesso") {
-                    window.dadosRelatorio = result.detalhes; const d = result.detalhes;
-                    const alertaBackup = result.aviso ? `<div style="background:rgba(231,76,60,0.2); color:#e74c3c; padding:10px; text-align:center;">⚠️ ${result.aviso}</div>` : `<div style="text-align:center; color:#1e7e34; font-size:11px;">Motor: ${result.motor}</div>`;
-                    const formatarParagrafo = (texto) => (texto || "").replace(/\n/g, '<br>');
-                    
-                    // Constrói o Raio-X Visual no final do Laudo da IA
-                    let logsHTML = "";
-                    if (result.arquivosLidos && result.arquivosLidos.length > 0) {
-                        const aceitosHtml = result.arquivosLidos.map(a => `<li style="color:#1e7e34; text-indent:0;">✅ ${a}</li>`).join('');
-                        const removidosHtml = (result.arquivosIgnorados || []).map(r => `<li style="color:#c0392b; text-indent:0;">❌ ${r}</li>`).join('');
-                        logsHTML = `
-                        <div style="margin-top: 40px; padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px; border: 1px solid rgba(0,0,0,0.1);">
-                            <h3 style="color:#2b5797; margin-top:0; text-indent:0;">🗂️ RAIO-X DE EXTRAÇÃO DO E-SAJ</h3>
-                            <div style="display:flex; gap: 20px; flex-wrap: wrap;">
-                                <div style="flex:1; min-width: 250px;">
-                                    <strong style="color:#1e7e34; font-family: 'Segoe UI', sans-serif;">PEÇAS LIDAS PELA IA:</strong>
-                                    <ul style="padding-left:0; margin-top:10px; font-size:12px; font-family: monospace; list-style-type: none; max-height: 200px; overflow-y: auto;">${aceitosHtml}</ul>
-                                </div>
-                                <div style="flex:1; min-width: 250px;">
-                                    <strong style="color:#c0392b; font-family: 'Segoe UI', sans-serif;">LIXO DESCARTADO:</strong>
-                                    <ul style="padding-left:0; margin-top:10px; font-size:12px; font-family: monospace; list-style-type: none; max-height: 200px; overflow-y: auto;">${removidosHtml || '<li style="color:#888; text-indent:0;">Nenhum arquivo descartado.</li>'}</ul>
-                                </div>
-                            </div>
-                        </div>`;
-                    }
-                    
+                const res = await fetch('/analisar', { method: 'POST', body: fd });
+                const result = await res.json();
+
+                if (result.status === "sucesso") {
+                    window.dadosRelatorio = result.detalhes;
+                    const d = result.detalhes || {};
+
+                    const alertaBackup = result.aviso
+                        ? `<div style="background:rgba(231,76,60,0.2); color:#e74c3c; padding:10px; text-align:center; border-radius:6px; margin-bottom:15px;">⚠️ ${escapeHtmlSeguro(result.aviso)}</div>`
+                        : `<div style="text-align:center; color:#1e7e34; font-size:11px; margin-bottom:10px;">Motor: ${escapeHtmlSeguro(result.motor || 'não informado')}</div>`;
+
+                    const blocoBO = montarBlocoBOPrioritario(result.boPrioritario);
+                    const logsHTML = montarLogsExtracao(result);
+
                     document.getElementById('painel-p1').style.display = 'block';
                     document.getElementById('painel-p1').innerHTML = `
-                        <h2 style="text-align:center;">DOS FATOS</h2>${alertaBackup}
-                        <p style="text-align:justify;">${formatarParagrafo(d.relatorioFatos)}</p>
+                        <h2 style="text-align:center;">DOS FATOS</h2>
+                        ${alertaBackup}
+                        ${blocoBO}
+
+                        <p style="text-align:justify;">${formatarParagrafoRelatorio(d.relatorioFatos)}</p>
+
                         <div class="secao-auditoria">
-                            <h3>[A] DENÚNCIA</h3><p>${formatarParagrafo(d.campoA_denuncia)}</p>
-                            <h3>[B] BOLETINS DE OCORRÊNCIA</h3><p>${formatarParagrafo(d.campoB_bo)}</p>
-                            <h3>[C] DEPOIMENTOS E INTERROGATÓRIOS</h3><p>${formatarParagrafo(d.campoC_depoimentos)}</p>
-                            <h3>[D] LAUDOS E CERTIDÕES</h3><p>${formatarParagrafo(d.campoD_laudos)}</p>
-                            <h3>[E] RELATÓRIO DO DELEGADO</h3><p>${formatarParagrafo(d.campoE_delegado)}</p>
-                            <h3>[F] INCIDENTES PROCESSUAIS</h3><p>${formatarParagrafo(d.campoF_incidentes)}</p>
-                            <h3>[G] CRONOMETRIA</h3><p>${formatarParagrafo(d.campoG_cronometria)}</p>
-                            <h3 style="color:#e74c3c;">[H] PONTOS-CHAVE EXTRAÍDOS (DIVERGÊNCIAS E LACUNAS)</h3><p>${formatarParagrafo(d.pontosChave)}</p>
-                            <h3>[I] SENTENÇA E FASE ATUAL</h3><p>${formatarParagrafo(d.campoH_sentenca)}</p>
+                            <h3>[A] DENÚNCIA</h3>
+                            <p>${formatarParagrafoRelatorio(d.campoA_denuncia)}</p>
+
+                            <h3>[B] BOLETINS DE OCORRÊNCIA</h3>
+                            <p>${formatarParagrafoRelatorio(d.campoB_bo)}</p>
+
+                            <h3>[C] DEPOIMENTOS E INTERROGATÓRIOS</h3>
+                            <p>${formatarParagrafoRelatorio(d.campoC_depoimentos)}</p>
+
+                            <h3>[D] LAUDOS E CERTIDÕES</h3>
+                            <p>${formatarParagrafoRelatorio(d.campoD_laudos)}</p>
+
+                            <h3>[E] RELATÓRIO DO DELEGADO</h3>
+                            <p>${formatarParagrafoRelatorio(d.campoE_delegado)}</p>
+
+                            <h3>[F] INCIDENTES PROCESSUAIS</h3>
+                            <p>${formatarParagrafoRelatorio(d.campoF_incidentes)}</p>
+
+                            <h3>[G] CRONOMETRIA</h3>
+                            <p>${formatarParagrafoRelatorio(d.campoG_cronometria)}</p>
+
+                            <h3 style="color:#e74c3c;">[H] PONTOS-CHAVE</h3>
+                            <p>${formatarParagrafoRelatorio(d.pontosChave)}</p>
+
+                            <h3>[I] SENTENÇA / ÚLTIMO DESPACHO</h3>
+                            <p>${formatarParagrafoRelatorio(d.campoH_sentenca)}</p>
                         </div>
-                        ${logsHTML}`;
-                } else { document.getElementById('painel-p1').innerHTML = `<h2>Erro: ${result.erro}</h2>`; }
-            } catch(e) { document.getElementById('painel-p1').innerHTML = "<h2>Requisição expirou. Tente novamente.</h2>"; }
+
+                        ${logsHTML}
+                    `;
+                } else {
+                    document.getElementById('painel-p1').innerHTML = `<h2>Erro: ${escapeHtmlSeguro(result.erro)}</h2>`;
+                }
+            } catch (e) {
+                document.getElementById('painel-p1').innerHTML = "<h2>Falha de Conexão.</h2>";
+            }
         }
 
         // === ABA 2: TRANSCRIÇÃO MULTIPLA ===
