@@ -176,20 +176,21 @@ FORMATO EXATO DE SAÍDA ESPERADA:
         try {
             if (motor === 'gemini') {
                 if (!chaves.gemini) { logErros.push(`[GEMINI] Sem chave`); continue; }
-                // ATUALIZADO PARA O GEMINI 2.0 FLASH (Suporta processos gigantes)
-                const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaves.gemini}`, {
+                // ATUALIZADO PARA GEMINI 1.5 FLASH (1 Milhão de Tokens)
+                const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaves.gemini}`, {
                     contents: [{ parts: [{ text: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }] }],
                     generationConfig: { responseMimeType: "application/json" }
                 }, { headers: { 'Content-Type': 'application/json' } });
+                
                 let textoLimpoGemini = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
                 detalhesJSON = extrairJSON(textoLimpoGemini);
                 motorUtilizado = 'GEMINI'; break;
             }
             else if (motor === 'claude') {
                 if (!chaves.claude) { logErros.push(`[CLAUDE] Sem chave`); continue; }
-                // ATUALIZADO PARA A VERSÃO UNIVERSAL DE JUNHO
+                // ATUALIZADO PARA CLAUDE 3.5 OUTUBRO
                 const res = await axios.post('https://api.anthropic.com/v1/messages', {
-                    model: "claude-3-5-sonnet-20240620", max_tokens: 8000,
+                    model: "claude-3-5-sonnet-20241022", max_tokens: 8000,
                     messages: [{ role: "user", content: promptSistema + "\n\n=== TEXTO DO PROCESSO ===\n" + textoBruto }]
                 }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
                 detalhesJSON = extrairJSON(res.data.content[0].text); motorUtilizado = 'CLAUDE'; break;
@@ -328,18 +329,24 @@ async function processarArquivoAudio(file, model, chaves) {
 // Rota capaz de receber de 1 a 15 áudios simultaneamente
 app.post('/transcrever', uploadAudio.array('audios', 15), async (req, res) => {
     req.setTimeout(0);
-    const { model } = req.body; 
+    const model = req.body.model || 'universal-3-pro'; // Garante que nunca seja undefined
     const chaves = getKeys();
 
     if (model.includes('whisper') && (!chaves || !chaves.groq)) return res.status(403).json({ erro: "Chave da Groq ausente." });
     if (model.includes('universal') && (!chaves || !chaves.assembly)) return res.status(403).json({ erro: "Chave da AssemblyAI ausente." });
     if (!req.files || req.files.length === 0) return res.status(400).json({ erro: "Nenhum arquivo de áudio foi enviado." });
 
-    try { fs.chmodSync(ffmpegPath, 0o755); } catch (e) {}
+    try { fs.chmodSync(ffmpegPath, 0o755); } catch (e) {
+        console.warn('Aviso: Não foi possível aplicar chmod no ffmpeg. Se estiver no Linux, as conversões podem falhar.');
+    }
 
-    // Executa a conversão e transcrição de TODOS os arquivos simultaneamente na nuvem
-    const resultados = await Promise.all(req.files.map(file => processarArquivoAudio(file, model, chaves)));
-    res.json({ status: "sucesso", resultados });
+    try {
+        // Executa a conversão e transcrição de TODOS os arquivos simultaneamente na nuvem
+        const resultados = await Promise.all(req.files.map(file => processarArquivoAudio(file, model, chaves)));
+        res.json({ status: "sucesso", resultados });
+    } catch (e) {
+        res.status(500).json({ erro: `Falha Crítica no Processador: ${e.message}` });
+    }
 });
 
 // ============================================================
@@ -380,23 +387,28 @@ app.post('/estrategia', express.json(), async (req, res) => {
             try {
                 if (motor === 'claude' && chaves.claude) {
                     const res = await axios.post('https://api.anthropic.com/v1/messages', {
-                        model: "claude-3-5-sonnet-20240620", max_tokens: 4000, // <-- AQUI
+                        model: "claude-3-5-sonnet-20241022", max_tokens: 4000,
                         messages: [{ role: "user", content: promptEstrategico }]
                     }, { headers: { 'x-api-key': chaves.claude, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
                     dadosEstrategia = extrairJSON(res.data.content[0].text); break;
                 }
                 else if (motor === 'gemini' && chaves.gemini) {
-                    // ATUALIZADO PARA O GEMINI 2.0 FLASH <-- AQUI
-                    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaves.gemini}`, {
+                    // ATUALIZADO PARA GEMINI 1.5 FLASH
+                    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaves.gemini}`, {
                         contents: [{ parts: [{ text: promptEstrategico }] }],
                         generationConfig: { responseMimeType: "application/json" }
                     }, { headers: { 'Content-Type': 'application/json' } });
                     dadosEstrategia = extrairJSON(res.data.candidates[0].content.parts[0].text); break;
                 }
                 else if (motor === 'groq' && chaves.groq) {
+                    // A TRAVA DE SEGURANÇA: Se o texto for maior que o limite gratuito, force o Fallback para Gemini/Claude
+                    if (promptEstrategico.length > 25000) {
+                        logErros.push(`[GROQ] O texto de cruzamento (${promptEstrategico.length} caracteres) excede o limite. Acionando Fallback.`);
+                        continue; 
+                    }
                     const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
                         model: "llama-3.3-70b-versatile", 
-                        messages: [{ role: "user", content: promptEstrategico.substring(0, 15000) }], 
+                        messages: [{ role: "user", content: promptEstrategico }], 
                         response_format: { type: "json_object" }, temperature: 0.2
                     }, { headers: { 'Authorization': `Bearer ${chaves.groq}` } });
                     dadosEstrategia = extrairJSON(res.data.choices[0].message.content); break;
@@ -414,15 +426,15 @@ app.post('/estrategia', express.json(), async (req, res) => {
 
 async function chamarClaude(prompt, chave) {
     const res = await axios.post('https://api.anthropic.com/v1/messages', {
-        model: "claude-3-5-sonnet-20240620", max_tokens: 4000, // <-- AQUI
+        model: "claude-3-5-sonnet-20241022", max_tokens: 4000,
         messages: [{ role: "user", content: prompt }]
     }, { headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
     return res.data.content[0].text;
 }
 
 async function chamarGemini(prompt, chave) {
-    // ATUALIZADO PARA O GEMINI 2.0 FLASH <-- AQUI
-    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chave}`, {
+    // ATUALIZADO PARA GEMINI 1.5 FLASH
+    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chave}`, {
         contents: [{ parts: [{ text: prompt }] }]
     }, { headers: { 'Content-Type': 'application/json' } });
     return res.data.candidates[0].content.parts[0].text;
